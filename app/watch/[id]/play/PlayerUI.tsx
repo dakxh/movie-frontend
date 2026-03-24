@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
@@ -7,7 +8,7 @@ const proxyCache = new Map<string, string>();
 
 function generateProperResolvedHfPath(u: string): string {
   if (!u || typeof u !== 'string') return u;
-  let sanitized = u.split('?download=true')[0].split('&download=true')[0];
+  const sanitized = u.split('?download=true')[0].split('&download=true')[0];
   if (!sanitized.startsWith('https://huggingface.co/buckets/') || sanitized.includes('/resolve/')) {
     return sanitized;
   }
@@ -34,6 +35,16 @@ function ensureCorsHeaderProxy(rawAbsoluteUrl: string): string {
 const emptyAss = 'data:text/plain;charset=utf-8,' + encodeURIComponent(
   '[Script Info]\nScriptType: v4.00+\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Default,Arial,20,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,2,2,10,10,10,1\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n'
 );
+
+// Factory function to create the HLS Loader class outside of the React hook
+const createHfBucketsProxyLoader = (BaseLoader: any, proxyFn: (url: string) => string) => {
+  return class HfBucketsProxyLoader extends BaseLoader {
+    load(context: any, config: any, callbacks: any) {
+      if (context.url) context.url = proxyFn(context.url);
+      super.load(context, config, callbacks);
+    }
+  };
+};
 
 type SubTrack = { url: string; label: string; type: 'ass' | 'pgs' | 'off' };
 
@@ -106,12 +117,7 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
 
         if (!isMounted || !playerContainerRef.current) return;
 
-        class HfBucketsProxyLoader extends Hls.DefaultConfig.loader {
-          load(context: any, config: any, callbacks: any) {
-            if (context.url) context.url = ensureCorsHeaderProxy(context.url);
-            super.load(context, config, callbacks);
-          }
-        }
+        const HfBucketsProxyLoader = createHfBucketsProxyLoader(Hls.DefaultConfig.loader, ensureCorsHeaderProxy);
 
         const artOptions: any = {
           container: playerContainerRef.current,

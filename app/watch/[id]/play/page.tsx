@@ -4,7 +4,7 @@ import PlayerUI from './PlayerUI';
 // Utility to ensure we are hitting the raw/resolve endpoint for JSON directly from the server
 function generateProperResolvedHfPath(u: string): string {
   if (!u || typeof u !== 'string') return u;
-  let sanitized = u.split('?download=true')[0].split('&download=true')[0];
+  const sanitized = u.split('?download=true')[0].split('&download=true')[0];
   if (!sanitized.startsWith('https://huggingface.co/buckets/') || sanitized.includes('/resolve/')) {
     return sanitized;
   }
@@ -51,8 +51,8 @@ export default async function MoviePlayPage(props: {
     if (!response.ok) throw new Error(`Failed to fetch metadata: ${response.status}`);
     
     streamInfo = await response.json();
-  } catch (err: any) {
-    errorMsg = err.message || 'An unknown error occurred loading the stream metadata on the server.';
+  } catch (err: unknown) {
+    errorMsg = (err as Error).message || 'An unknown error occurred loading the stream metadata on the server.';
   }
 
   return (
