@@ -45,7 +45,7 @@ interface DeepMetadata {
 }
 
 async function fetchDeepMetadata(id: string): Promise<DeepMetadata | null> {
-  const catRes = await fetch(CATALOG_URL, { next: { revalidate: 3600 } })
+  const catRes = await fetch(CATALOG_URL, { next: { revalidate: 3 } })
 
   if (!catRes.ok) return null
 

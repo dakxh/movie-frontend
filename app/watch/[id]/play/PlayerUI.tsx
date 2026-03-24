@@ -1,4 +1,3 @@
-// app/watch/[id]/play/PlayerUI.tsx
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
@@ -45,6 +44,9 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
   const pgsWorkerRef = useRef<Worker | null>(null);
   const syncLoopRef = useRef<number | null>(null);
   const activeSubTypeRef = useRef<'ass' | 'pgs' | 'none'>('none');
+  
+  // Anti-Spam state tracking
+  const lastSentTimeRef = useRef<number>(-1);
 
   const [isLoading, setIsLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -187,7 +189,6 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
            canvas.style.pointerEvents = 'none';
            canvas.style.zIndex = '20'; 
            
-           // Initialize default resolution so it isn't 300x150. Worker will overwrite.
            canvas.width = 1920;
            canvas.height = 1080;
            
@@ -205,10 +206,16 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
                url: activeSubTypeRef.current === 'pgs' ? allSubs[1].url : null
            }, [offscreen]);
 
-           // FIX: Blazing fast requestAnimationFrame loop to ensure Lookahead cache accurately tracks scrubbing
+           // Optimized Anti-Spam Frame Sync
            const startSyncEngine = () => {
                if (activeSubTypeRef.current === 'pgs' && pgsWorkerRef.current && artRef.current) {
-                   pgsWorkerRef.current.postMessage({ type: 'TIME', time: artRef.current.currentTime });
+                   const rawTime = artRef.current.video ? artRef.current.video.currentTime : artRef.current.currentTime;
+                   
+                   // Only post a message if the time has actually advanced or retreated
+                   if (rawTime !== lastSentTimeRef.current) {
+                       pgsWorkerRef.current.postMessage({ type: 'TIME', time: rawTime || 0 });
+                       lastSentTimeRef.current = rawTime;
+                   }
                }
                syncLoopRef.current = requestAnimationFrame(startSyncEngine);
            };

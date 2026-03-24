@@ -3,11 +3,12 @@ let ctx = null;
 let canvasWidth = 1920;
 let canvasHeight = 1080;
 let pgsEvents = [];
+
+// Upgraded to a Map-based LRU Cache
 let imageCache = new Map();
+const MAX_CACHE_SIZE = 150; 
 
-// Tracks the exact combination of overlapping images currently on screen
 let currentDrawnSignature = null; 
-
 const CORS_PROXY_BASE = "https://xkca.dadalapathy756.workers.dev/?url=";
 
 function ensureCorsHeaderProxy(urlToFetch) {
@@ -52,10 +53,7 @@ async function loadBdnXml(xmlUrl) {
         }
 
         const events = [];
-        
-        // FIX: Two-step regex to capture an infinite number of overlapping graphics inside a single Event
         const eventBlockRegex = /<Event\s+InTC="([^"]+)"\s+OutTC="([^"]+)"[^>]*>([\s\S]*?)<\/Event>/g;
-        const graphicRegex = /<Graphic\s+Width="(\d+)"\s+Height="(\d+)"\s+X="(\d+)"\s+Y="(\d+)"[^>]*>([^<]+)<\/Graphic>/g;
         
         let eventMatch;
         while ((eventMatch = eventBlockRegex.exec(text)) !== null) {
@@ -63,17 +61,21 @@ async function loadBdnXml(xmlUrl) {
             const outTC = eventMatch[2];
             const innerXML = eventMatch[3];
 
+            const graphicRegex = /<Graphic\s+Width="(\d+)"\s+Height="(\d+)"\s+X="(\d+)"\s+Y="(\d+)"[^>]*>([^<]+)<\/Graphic>/g;
             let graphicMatch;
-            // Iterate through every graphic packed into this specific timestamp
+            
             while ((graphicMatch = graphicRegex.exec(innerXML)) !== null) {
-                const absoluteImgUrl = `${baseUrl}/${graphicMatch[5].trim()}`;
+                const imgName = graphicMatch[5].trim();
+                if (imgName === 'None') continue;
+
+                const absoluteImgUrl = `${baseUrl}/${imgName}`;
                 events.push({
                     start: parseTC(inTC, fps),
                     end: parseTC(outTC, fps),
-                    w: parseInt(graphicMatch[1]),
-                    h: parseInt(graphicMatch[2]),
-                    x: parseInt(graphicMatch[3]),
-                    y: parseInt(graphicMatch[4]),
+                    w: parseInt(graphicMatch[1], 10),
+                    h: parseInt(graphicMatch[2], 10),
+                    x: parseInt(graphicMatch[3], 10),
+                    y: parseInt(graphicMatch[4], 10),
                     url: ensureCorsHeaderProxy(absoluteImgUrl)
                 });
             }
@@ -81,7 +83,7 @@ async function loadBdnXml(xmlUrl) {
         
         pgsEvents = events;
         
-        // Preload the first batch to ensure immediate playback readiness
+        // Pre-warm the cache with the first few frames
         for(let i = 0; i < Math.min(10, events.length); i++) {
             preloadImage(events[i].url);
         }
@@ -91,55 +93,54 @@ async function loadBdnXml(xmlUrl) {
 }
 
 async function preloadImage(url) {
-    if (imageCache.has(url)) return;
+    if (imageCache.has(url)) {
+        // LRU bump: If it already exists, move it to the end (most recently used)
+        const bmp = imageCache.get(url);
+        imageCache.delete(url);
+        imageCache.set(url, bmp);
+        return;
+    }
+    
     try {
-        imageCache.set(url, null); 
+        imageCache.set(url, null); // Set a sync lock to prevent duplicate fetch calls
         const response = await fetch(url);
+        if (!response.ok) throw new Error("Network response was not ok");
         const blob = await response.blob();
         
-        // Decodes natively on the GPU thread
         const bitmap = await createImageBitmap(blob);
         imageCache.set(url, bitmap);
+        
+        // LRU Eviction Protocol: Purge the oldest frame if we exceed the RAM limit
+        if (imageCache.size > MAX_CACHE_SIZE) {
+            const firstKey = imageCache.keys().next().value;
+            const staleBmp = imageCache.get(firstKey);
+            if (staleBmp) staleBmp.close(); // Explicitly free GPU memory
+            imageCache.delete(firstKey);
+        }
+
     } catch (e) {
         console.error("[PGS Worker] Failed to decode WebP", e);
-        imageCache.delete(url);
+        imageCache.delete(url); // Remove the lock so it can retry later if needed
     }
 }
 
 function drawFrame(time) {
     if (!ctx || pgsEvents.length === 0) return;
 
-    // Aggressive Memory GC: Remove images that are 15+ seconds in the past
-    if (imageCache.size > 30) {
-        for (const [url, bmp] of imageCache.entries()) {
-            const ev = pgsEvents.find(e => e.url === url);
-            if (ev && ev.end < time - 15) {
-                if (bmp) bmp.close(); 
-                imageCache.delete(url);
-            }
-        }
-    }
-
-    // Lookahead Cache: Dynamically load images needed in the next 15 seconds
-    const upcoming = pgsEvents.filter(e => e.start >= time && e.start <= time + 15);
+    // Lookahead Cache: ensure the next 15 seconds are downloading/cached
+    const upcoming = pgsEvents.filter(e => e.end >= time && e.start <= time + 15);
     for(const ev of upcoming) {
-        if (!imageCache.has(ev.url)) preloadImage(ev.url);
+        preloadImage(ev.url); // LRU logic inside handles duplicates automatically
     }
 
-    // 1. Grab ALL subtitles that should be on screen right now
     const activeEvents = pgsEvents.filter(e => time >= e.start && time <= e.end);
 
     if (activeEvents.length > 0) {
-        // 2. Only attempt to draw the ones that have successfully finished downloading
         const loadedEvents = activeEvents.filter(e => imageCache.has(e.url) && imageCache.get(e.url) !== null);
-
-        // 3. Create a unique state signature for this combination of images
         const signature = loadedEvents.map(e => e.url).sort().join('|');
 
-        // 4. If the screen doesn't match the signature, wipe and redraw the stack
         if (currentDrawnSignature !== signature) {
             ctx.clearRect(0, 0, canvasWidth, canvasHeight);
-            
             for (const ev of loadedEvents) {
                 const bmp = imageCache.get(ev.url);
                 ctx.drawImage(bmp, ev.x, ev.y, ev.w, ev.h);

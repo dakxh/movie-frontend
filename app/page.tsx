@@ -16,11 +16,11 @@ interface CatalogItem {
   poster_url: string
 }
 
-export const revalidate = 3600
+export const revalidate = 3
 
 export default async function CatalogGrid() {
   const res = await fetch(CATALOG_URL, {
-    next: { revalidate: 3600 }
+    next: { revalidate: 3 }
   })
 
   const catalog: CatalogItem[] = await res.json()
