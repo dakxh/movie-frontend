@@ -1,9 +1,9 @@
+// app/watch/[id]/play/PlayerUI.tsx
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
 
 const CORS_PROXY_BASE = "https://xkca.dadalapathy756.workers.dev/?url=";
-
 const proxyCache = new Map<string, string>();
 
 function generateProperResolvedHfPath(u: string): string {
@@ -31,19 +31,26 @@ function ensureCorsHeaderProxy(rawAbsoluteUrl: string): string {
   return finalUrl;
 }
 
+const emptyAss = 'data:text/plain;charset=utf-8,' + encodeURIComponent(
+  '[Script Info]\nScriptType: v4.00+\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Default,Arial,20,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,2,2,10,10,10,1\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n'
+);
+
+type SubTrack = { url: string; label: string; type: 'ass' | 'pgs' | 'off' };
+
 export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
   const playerContainerRef = useRef<HTMLDivElement>(null);
   const artRef = useRef<any>(null);
   const hlsRef = useRef<any>(null);
 
-  // UI State
+  const pgsWorkerRef = useRef<Worker | null>(null);
+  const syncLoopRef = useRef<number | null>(null);
+  const activeSubTypeRef = useRef<'ass' | 'pgs' | 'none'>('none');
+
   const [isLoading, setIsLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-
-  // Track State
   const [audioTracks, setAudioTracks] = useState<{ id: number; name: string }[]>([]);
   const [activeAudio, setActiveAudio] = useState<number>(0);
-  const [subTracks, setSubTracks] = useState<{ url: string; label: string }[]>([]);
+  const [subTracks, setSubTracks] = useState<SubTrack[]>([]);
   const [activeSub, setActiveSub] = useState<string>('');
 
   useEffect(() => {
@@ -52,23 +59,42 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
     const initializePlayer = async () => {
       try {
         let manifestUrl = streamInfo.hls_manifest_url;
-        if (manifestUrl) {
-          manifestUrl = generateProperResolvedHfPath(manifestUrl);
-          manifestUrl = ensureCorsHeaderProxy(manifestUrl); 
-        }
+        if (manifestUrl) manifestUrl = ensureCorsHeaderProxy(generateProperResolvedHfPath(manifestUrl));
 
         const fonts = (streamInfo.fonts || []).map((f: string) => ensureCorsHeaderProxy(f));
 
-        const parsedSubs = (streamInfo.ass_subtitles || []).map((sub: any) => {
-          const rawUrl = generateProperResolvedHfPath(typeof sub === 'string' ? sub : sub.url);
-          const safeUrl = ensureCorsHeaderProxy(rawUrl);
-          const label = typeof sub === 'string' ? 'Subtitle' : sub.label;
-          return { url: safeUrl, label };
-        });
+        const parsedAss: SubTrack[] = (streamInfo.ass_subtitles || []).map((sub: any) => ({
+          url: ensureCorsHeaderProxy(generateProperResolvedHfPath(typeof sub === 'string' ? sub : sub.url)),
+          label: (typeof sub === 'string' ? 'Subtitle' : sub.label) + ' (Text)',
+          type: 'ass'
+        }));
 
-        if (parsedSubs.length > 0) {
-          setSubTracks(parsedSubs);
-          setActiveSub(parsedSubs[0].url);
+        const parsedPgs: SubTrack[] = (streamInfo.pgs_overlays || []).map((sub: any) => ({
+          url: ensureCorsHeaderProxy(generateProperResolvedHfPath(typeof sub === 'string' ? sub : sub.url)),
+          label: (typeof sub === 'string' ? 'Overlay' : sub.label) + ' (Image)',
+          type: 'pgs'
+        }));
+
+        const allSubs: SubTrack[] = [
+          { url: 'off', label: 'Off', type: 'off' }, 
+          ...parsedAss, 
+          ...parsedPgs
+        ];
+        
+        setSubTracks(allSubs);
+
+        let initialJassubUrl = emptyAss;
+        if (allSubs.length > 1) {
+            setActiveSub(allSubs[1].url);
+            
+            if (allSubs[1].type === 'ass') {
+              initialJassubUrl = allSubs[1].url;
+              activeSubTypeRef.current = 'ass';
+            } else if (allSubs[1].type === 'pgs') {
+              activeSubTypeRef.current = 'pgs';
+            }
+        } else {
+            setActiveSub('off');
         }
 
         const Artplayer = (await import('artplayer')).default;
@@ -79,9 +105,7 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
 
         class HfBucketsProxyLoader extends Hls.DefaultConfig.loader {
           load(context: any, config: any, callbacks: any) {
-            if (context.url) {
-              context.url = ensureCorsHeaderProxy(context.url);
-            }
+            if (context.url) context.url = ensureCorsHeaderProxy(context.url);
             super.load(context, config, callbacks);
           }
         }
@@ -118,10 +142,7 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
                 artInstance.on('destroy', () => hls.destroy());
 
                 hls.on(Hls.Events.ERROR, function (event, data) {
-                  if (data.fatal && data.type === Hls.ErrorTypes.NETWORK_ERROR) {
-                    console.warn("Fatal proxy timeout, attempting recovery...");
-                    hls.startLoad();
-                  }
+                  if (data.fatal && data.type === Hls.ErrorTypes.NETWORK_ERROR) hls.startLoad();
                 });
 
                 hls.on(Hls.Events.AUDIO_TRACKS_UPDATED, (_, data) => {
@@ -142,20 +163,58 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
           }
         };
 
-        if (parsedSubs.length > 0) {
-          artOptions.plugins = [
-            artplayerPluginJassub({
-              debug: false,
-              subUrl: parsedSubs[0].url,
-              fonts: fonts,
-              workerUrl: '/jassub-worker.js',
-              wasmUrl: '/jassub-worker.wasm',
-              modernWasmUrl: '/jassub-worker.wasm',
-            })
-          ];
-        }
+        artOptions.plugins = [
+          artplayerPluginJassub({
+            debug: false,
+            subUrl: initialJassubUrl,
+            fonts: fonts,
+            workerUrl: '/jassub-worker.js',
+            wasmUrl: '/jassub-worker.wasm',
+            modernWasmUrl: '/jassub-worker.wasm',
+          })
+        ];
 
         artRef.current = new Artplayer(artOptions);
+        
+        artRef.current.on('ready', () => {
+           const canvas = document.createElement('canvas');
+           canvas.style.position = 'absolute';
+           canvas.style.top = '0';
+           canvas.style.left = '0';
+           canvas.style.width = '100%';
+           canvas.style.height = '100%';
+           canvas.style.objectFit = 'contain'; 
+           canvas.style.pointerEvents = 'none';
+           canvas.style.zIndex = '20'; 
+           
+           // Initialize default resolution so it isn't 300x150. Worker will overwrite.
+           canvas.width = 1920;
+           canvas.height = 1080;
+           
+           artRef.current.template.$player.appendChild(canvas);
+
+           // @ts-ignore
+           const offscreen = canvas.transferControlToOffscreen();
+           
+           const worker = new Worker('/pgs-worker.js');
+           pgsWorkerRef.current = worker;
+
+           worker.postMessage({
+               type: 'INIT',
+               canvas: offscreen,
+               url: activeSubTypeRef.current === 'pgs' ? allSubs[1].url : null
+           }, [offscreen]);
+
+           // FIX: Blazing fast requestAnimationFrame loop to ensure Lookahead cache accurately tracks scrubbing
+           const startSyncEngine = () => {
+               if (activeSubTypeRef.current === 'pgs' && pgsWorkerRef.current && artRef.current) {
+                   pgsWorkerRef.current.postMessage({ type: 'TIME', time: artRef.current.currentTime });
+               }
+               syncLoopRef.current = requestAnimationFrame(startSyncEngine);
+           };
+           syncLoopRef.current = requestAnimationFrame(startSyncEngine);
+        });
+
         setIsLoading(false);
 
       } catch (err: any) {
@@ -170,14 +229,13 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
 
     return () => {
       isMounted = false;
-      if (hlsRef.current) {
-        hlsRef.current.destroy();
-        hlsRef.current = null;
+      if (syncLoopRef.current) cancelAnimationFrame(syncLoopRef.current);
+      if (pgsWorkerRef.current) {
+          pgsWorkerRef.current.postMessage({ type: 'CLEAR' });
+          pgsWorkerRef.current.terminate();
       }
-      if (artRef.current) {
-        artRef.current.destroy(true);
-        artRef.current = null;
-      }
+      if (hlsRef.current) hlsRef.current.destroy();
+      if (artRef.current) artRef.current.destroy(true);
     };
   }, [streamInfo]);
 
@@ -188,30 +246,47 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
     }
   };
 
-  const switchSubtitle = (url: string) => {
-    if (!artRef.current || !artRef.current.plugins) return;
+  const switchSubtitle = (sub: SubTrack) => {
+    if (!artRef.current) return;
+    const p = artRef.current.plugins?.artplayerPluginJassub;
     
-    // Direct, exact match to how your index.html handles it. 
-    // No loops, no guessing.
-    const p = artRef.current.plugins.artplayerPluginJassub;
+    if (sub.type === 'ass') {
+       activeSubTypeRef.current = 'ass';
+       
+       if (pgsWorkerRef.current) {
+           pgsWorkerRef.current.postMessage({ type: 'CLEAR' });
+       }
 
-    if (p) {
-      if (typeof p.switchSubtitle === 'function') p.switchSubtitle(url);
-      else if (typeof p.switch === 'function') p.switch(url);
-      else if (typeof p.setTrackByUrl === 'function') p.setTrackByUrl(url);
-      // These last two lines are what your original Next.js code was missing 
-      // but your index.html caught perfectly.
-      else if (p.jassub && typeof p.jassub.setTrackByUrl === 'function') p.jassub.setTrackByUrl(url);
-      else if (p.instance && typeof p.instance.setTrackByUrl === 'function') p.instance.setTrackByUrl(url);
-      
-      setActiveSub(url);
-    } else {
-      console.error("JASSUB plugin is not registered. Subtitle switch failed.");
-      if (artRef.current.subtitle && typeof artRef.current.subtitle.switch === 'function') {
-        artRef.current.subtitle.switch(url);
-        setActiveSub(url);
-      }
+       if (p) {
+         if (typeof p.switchSubtitle === 'function') p.switchSubtitle(sub.url);
+         else if (typeof p.switch === 'function') p.switch(sub.url);
+         else if (p.jassub && typeof p.jassub.setTrackByUrl === 'function') p.jassub.setTrackByUrl(sub.url);
+       }
+    } 
+    else if (sub.type === 'pgs') {
+       activeSubTypeRef.current = 'pgs';
+
+       if (p) {
+         if (typeof p.switchSubtitle === 'function') p.switchSubtitle(emptyAss);
+         else if (typeof p.switch === 'function') p.switch(emptyAss);
+         else if (p.jassub && typeof p.jassub.setTrackByUrl === 'function') p.jassub.setTrackByUrl(emptyAss);
+       }
+
+       if (pgsWorkerRef.current) {
+           pgsWorkerRef.current.postMessage({ type: 'LOAD', url: sub.url });
+       }
     }
+    else {
+       activeSubTypeRef.current = 'none';
+       if (pgsWorkerRef.current) pgsWorkerRef.current.postMessage({ type: 'CLEAR' });
+       if (p) {
+         if (typeof p.switchSubtitle === 'function') p.switchSubtitle(emptyAss);
+         else if (typeof p.switch === 'function') p.switch(emptyAss);
+         else if (p.jassub && typeof p.jassub.setTrackByUrl === 'function') p.jassub.setTrackByUrl(emptyAss);
+       }
+    }
+    
+    setActiveSub(sub.url);
   };
 
   return (
@@ -271,7 +346,7 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
                 subTracks.map((sub, idx) => (
                   <button
                     key={idx}
-                    onClick={() => switchSubtitle(sub.url)}
+                    onClick={() => switchSubtitle(sub)}
                     className={`px-4 py-2 rounded-xl text-xs tracking-wider transition-all duration-200 ${activeSub === sub.url
                       ? 'bg-blue-500 text-white font-bold shadow-md shadow-blue-500/20'
                       : 'bg-transparent text-neutral-400 hover:bg-neutral-900 hover:text-neutral-200'
