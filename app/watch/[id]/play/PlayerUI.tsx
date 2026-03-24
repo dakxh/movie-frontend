@@ -30,6 +30,7 @@ function ensureCorsHeaderProxy(rawAbsoluteUrl: string): string {
   return finalUrl;
 }
 
+// A valid, empty ASS file to feed Jassub when we want to "turn off" text subs and switch to PGS
 const emptyAss = 'data:text/plain;charset=utf-8,' + encodeURIComponent(
   '[Script Info]\nScriptType: v4.00+\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Default,Arial,20,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,2,2,10,10,10,1\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n'
 );
@@ -253,9 +254,28 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
     }
   };
 
-  const switchSubtitle = (sub: SubTrack) => {
+  // Helper function to safely route the URL to the Jassub WebAssembly Instance
+  const switchJassubTrack = (url: string) => {
     if (!artRef.current) return;
     const p = artRef.current.plugins?.artplayerPluginJassub;
+    if (!p) return;
+
+    // FIX: The plugin object contains the raw engine inside the `.instance` property
+    if (p.instance && typeof p.instance.setTrackByUrl === 'function') {
+      p.instance.setTrackByUrl(url);
+    } else if (typeof p.setTrackByUrl === 'function') {
+      p.setTrackByUrl(url);
+    } else if (typeof p.switchSubtitle === 'function') {
+      p.switchSubtitle(url);
+    } else if (typeof p.switch === 'function') {
+      p.switch(url);
+    } else {
+      console.warn("Jassub plugin found, but unable to locate track switching method.", p);
+    }
+  };
+
+  const switchSubtitle = (sub: SubTrack) => {
+    if (!artRef.current) return;
     
     if (sub.type === 'ass') {
        activeSubTypeRef.current = 'ass';
@@ -263,21 +283,13 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
        if (pgsWorkerRef.current) {
            pgsWorkerRef.current.postMessage({ type: 'CLEAR' });
        }
-
-       if (p) {
-         if (typeof p.switchSubtitle === 'function') p.switchSubtitle(sub.url);
-         else if (typeof p.switch === 'function') p.switch(sub.url);
-         else if (p.jassub && typeof p.jassub.setTrackByUrl === 'function') p.jassub.setTrackByUrl(sub.url);
-       }
+       
+       switchJassubTrack(sub.url);
     } 
     else if (sub.type === 'pgs') {
        activeSubTypeRef.current = 'pgs';
 
-       if (p) {
-         if (typeof p.switchSubtitle === 'function') p.switchSubtitle(emptyAss);
-         else if (typeof p.switch === 'function') p.switch(emptyAss);
-         else if (p.jassub && typeof p.jassub.setTrackByUrl === 'function') p.jassub.setTrackByUrl(emptyAss);
-       }
+       switchJassubTrack(emptyAss);
 
        if (pgsWorkerRef.current) {
            pgsWorkerRef.current.postMessage({ type: 'LOAD', url: sub.url });
@@ -286,11 +298,7 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
     else {
        activeSubTypeRef.current = 'none';
        if (pgsWorkerRef.current) pgsWorkerRef.current.postMessage({ type: 'CLEAR' });
-       if (p) {
-         if (typeof p.switchSubtitle === 'function') p.switchSubtitle(emptyAss);
-         else if (typeof p.switch === 'function') p.switch(emptyAss);
-         else if (p.jassub && typeof p.jassub.setTrackByUrl === 'function') p.jassub.setTrackByUrl(emptyAss);
-       }
+       switchJassubTrack(emptyAss);
     }
     
     setActiveSub(sub.url);
