@@ -1,17 +1,17 @@
 import Link from 'next/link'
 import Image from 'next/image'
 
-const CATALOG_URL = 'https://huggingface.co/buckets/nookaharsha/anime/resolve/global_catalog.json'
+const CATALOG_URL = 'https://huggingface.co/buckets/Gravatar44/xkca/resolve/global_catalog.json'
 
 interface CatalogItem {
   id: number
-  type: 'movie' | 'anime'
+  type: 'movie' | 'series'
   title: string
   year: string
   date_added: number
   available_resolutions?: string[]
   available_variations?: string[]
-  metadata_url?: Record<string, string>
+  hls_manifest_url?: Record<string, string>
   series_metadata_url?: string
   poster_url: string
 }

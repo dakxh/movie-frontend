@@ -2,12 +2,12 @@ import { preload } from 'react-dom'
 import Link from 'next/link'
 import Image from 'next/image'
 
-const CATALOG_URL = 'https://huggingface.co/buckets/nookaharsha/anime/resolve/global_catalog.json'
+const CATALOG_URL = 'https://huggingface.co/buckets/Gravatar44/xkca/resolve/global_catalog.json'
 
 interface CatalogItem {
   id: number
-  type: 'movie' | 'anime'
-  metadata_url?: Record<string, string>
+  type: 'movie' | 'series'
+  hls_manifest_url?: Record<string, string>
   series_metadata_url?: string
 }
 
@@ -22,7 +22,7 @@ interface Episode {
 
 interface DeepMetadata {
   id: number
-  type: 'movie' | 'anime'
+  type: 'movie' | 'series'
   title: string
   year: string
   rating: number
@@ -46,37 +46,35 @@ interface DeepMetadata {
 
 async function fetchDeepMetadata(id: string): Promise<DeepMetadata | null> {
   const catRes = await fetch(CATALOG_URL, { next: { revalidate: 3 } })
-
   if (!catRes.ok) return null
 
   const catalog: CatalogItem[] = await catRes.json()
   const entry = catalog.find((i) => i.id.toString() === id)
-
   if (!entry) return null
 
   let metaUrl = ''
   let variations: string[] = []
-  let rawMetadataUrls: Record<string, string> | undefined = undefined
+  let rawManifestUrls: Record<string, string> | undefined = undefined
 
-  if (entry.type === 'movie' && entry.metadata_url) {
-    variations = Object.keys(entry.metadata_url)
-    metaUrl = entry.metadata_url[variations[0]] 
-    rawMetadataUrls = entry.metadata_url
-  } else if (entry.type === 'anime' && entry.series_metadata_url) {
+  if (entry.type === 'movie' && entry.hls_manifest_url) {
+    variations = Object.keys(entry.hls_manifest_url)
+    // String replacement to dynamically locate the JSON metadata
+    metaUrl = entry.hls_manifest_url[variations[0]].replace('master.m3u8', 'metadata.json')
+    rawManifestUrls = entry.hls_manifest_url // Store raw manifests for routing
+  } else if (entry.type === 'series' && entry.series_metadata_url) {
     metaUrl = entry.series_metadata_url
   } else {
     return null
   }
 
   const metaRes = await fetch(metaUrl, { cache: 'no-store' })
-
   if (!metaRes.ok) return null
 
   const deepMetadata: DeepMetadata = await metaRes.json()
-  
+
   if (variations.length > 0) {
     deepMetadata.available_variations = variations
-    deepMetadata.metadata_url = rawMetadataUrls // Pass the raw dictionary down
+    deepMetadata.metadata_url = rawManifestUrls // Pass manifest dictionary to UI
   }
 
   return deepMetadata
@@ -100,10 +98,10 @@ export default async function WatchPage(props: {
 }) {
   const params = await props.params
   const searchParams = await props.searchParams
-  
+
   const { id } = params
   const activeSeason = searchParams.season as string | undefined
-  
+
   const data = await fetchDeepMetadata(id)
 
   if (!data) {
@@ -119,10 +117,10 @@ export default async function WatchPage(props: {
     preload(data.hls_manifest_url, { as: 'fetch', crossOrigin: 'anonymous' })
   }
 
-  const isAnime = data.type === 'anime'
-  const groupedSeasons = isAnime && data.episodes ? groupEpisodesBySeason(data.episodes) : null
-  const showEpisodeView = isAnime && activeSeason && groupedSeasons && groupedSeasons[Number(activeSeason)]
-  
+  const isSeries = data.type === 'series'
+  const groupedSeasons = isSeries && data.episodes ? groupEpisodesBySeason(data.episodes) : null
+  const showEpisodeView = isSeries && activeSeason && groupedSeasons && groupedSeasons[Number(activeSeason)]
+
   // The episodes to render if we are in the episode view
   const activeEpisodes = showEpisodeView ? groupedSeasons[Number(activeSeason)] : []
 
@@ -153,7 +151,7 @@ export default async function WatchPage(props: {
 
         {/* CONTENT LAYOUT */}
         <div className="relative z-10 h-full w-full flex items-center justify-start">
-          
+
           {/* POSTER (Position Anchored) */}
           <div className="h-full shrink-0">
             <Image
@@ -168,7 +166,7 @@ export default async function WatchPage(props: {
 
           {/* RIGHT SIDE CONTENT CONTAINER */}
           <div className={`flex-1 md:px-12 lg:px-16 select-none h-full flex flex-col ${showEpisodeView ? 'mt-24 pb-24 overflow-y-auto custom-scrollbar' : 'mt-50 justify-center'}`}>
-            
+
             {/* ========================================================== */}
             {/* VIEW A: DETAIL & SELECTOR VIEW (Movies or Anime Main Page) */}
             {/* ========================================================== */}
@@ -203,7 +201,8 @@ export default async function WatchPage(props: {
                       {data.available_variations.map((variation) => (
                         <Link
                           key={variation}
-                          href={`/watch/${id}/play?metaUrl=${encodeURIComponent(data.metadata_url![variation])}`}
+                          // Safely construct the metadata URL to pass to the player
+                          href={`/watch/${id}/play?metaUrl=${encodeURIComponent(data.metadata_url![variation].replace('master.m3u8', 'metadata.json'))}`}
                           className="px-6 py-3 rounded-lg border-2 border-neutral-800 hover:border-neutral-400 hover:text-white text-neutral-300 transition-colors font-mono text-sm tracking-widest bg-neutral-900/50 hover:bg-neutral-800 text-center"
                         >
                           {variation}
@@ -213,8 +212,8 @@ export default async function WatchPage(props: {
                   </div>
                 )}
 
-                {/* SEASONS SELECTOR BOX (Anime) */}
-                {data.type === 'anime' && groupedSeasons && Object.keys(groupedSeasons).length > 0 && (
+                {/* SEASONS SELECTOR BOX (Series) */}
+                {data.type === 'series' && groupedSeasons && Object.keys(groupedSeasons).length > 0 && (
                   <div className="mt-4 bg-black p-6 rounded-md shadow-2xl flex flex-col gap-4">
                     <h3 className="text-neutral-500 font-mono text-xs uppercase tracking-widest">Select Season</h3>
                     <div className="flex flex-wrap gap-4">
@@ -238,11 +237,11 @@ export default async function WatchPage(props: {
             {/* ========================================================== */}
             {showEpisodeView && (
               <div className="max-w-3xl flex flex-col w-full pr-8">
-                
+
                 {/* Back Button & Contextual Header */}
                 <div className="mb-8 flex flex-col gap-2">
-                  <Link 
-                    href={`/watch/${id}`} 
+                  <Link
+                    href={`/watch/${id}`}
                     className="text-neutral-200 hover:text-white font-mono text-xs tracking-widest uppercase mb-2 w-fit"
                   >
                     ← Back to Seasons
@@ -295,8 +294,8 @@ function Badge({ text, highlight = false }: { text: string, highlight?: boolean 
   return (
     <span
       className={`px-2 py-1 rounded border ${highlight
-          ? 'bg-neutral-800 border-neutral-500 text-neutral-200'
-          : 'bg-neutral-900 border-neutral-800 text-neutral-500'
+        ? 'bg-neutral-800 border-neutral-500 text-neutral-200'
+        : 'bg-neutral-900 border-neutral-800 text-neutral-500'
         }`}
     >
       {text}

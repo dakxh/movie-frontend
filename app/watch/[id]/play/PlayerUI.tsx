@@ -1,10 +1,8 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
 
 const CORS_PROXY_BASE = "https://xkca.dadalapathy756.workers.dev/?url=";
-const proxyCache = new Map<string, string>();
 
 function generateProperResolvedHfPath(u: string): string {
   if (!u || typeof u !== 'string') return u;
@@ -21,24 +19,18 @@ function generateProperResolvedHfPath(u: string): string {
 }
 
 function ensureCorsHeaderProxy(rawAbsoluteUrl: string): string {
-  if (proxyCache.has(rawAbsoluteUrl)) return proxyCache.get(rawAbsoluteUrl)!;
   const urlToFetch = generateProperResolvedHfPath(rawAbsoluteUrl);
-  let finalUrl = urlToFetch;
   if (urlToFetch.includes('huggingface.co/buckets/')) {
-    finalUrl = CORS_PROXY_BASE + encodeURIComponent(urlToFetch);
+    return CORS_PROXY_BASE + encodeURIComponent(urlToFetch);
   }
-  proxyCache.set(rawAbsoluteUrl, finalUrl);
-  return finalUrl;
+  return urlToFetch;
 }
 
-// A valid, empty ASS file to feed Jassub when we want to "turn off" text subs and switch to PGS
-const emptyAss = 'data:text/plain;charset=utf-8,' + encodeURIComponent(
-  '[Script Info]\nScriptType: v4.00+\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Default,Arial,20,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,2,2,10,10,10,1\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n'
-);
-
-// Factory function to create the HLS Loader class outside of the React hook
+// Factory function to create the HLS Loader class
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const createHfBucketsProxyLoader = (BaseLoader: any, proxyFn: (url: string) => string) => {
   return class HfBucketsProxyLoader extends BaseLoader {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     load(context: any, config: any, callbacks: any) {
       if (context.url) context.url = proxyFn(context.url);
       super.load(context, config, callbacks);
@@ -46,26 +38,22 @@ const createHfBucketsProxyLoader = (BaseLoader: any, proxyFn: (url: string) => s
   };
 };
 
-type SubTrack = { url: string; label: string; type: 'ass' | 'pgs' | 'off' };
-
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
   const playerContainerRef = useRef<HTMLDivElement>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const artRef = useRef<any>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const hlsRef = useRef<any>(null);
-
-  const pgsWorkerRef = useRef<Worker | null>(null);
-  const syncLoopRef = useRef<number | null>(null);
-  const activeSubTypeRef = useRef<'ass' | 'pgs' | 'none'>('none');
-  
-  // Anti-Spam state tracking
-  const lastSentTimeRef = useRef<number>(-1);
 
   const [isLoading, setIsLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  
   const [audioTracks, setAudioTracks] = useState<{ id: number; name: string }[]>([]);
   const [activeAudio, setActiveAudio] = useState<number>(0);
-  const [subTracks, setSubTracks] = useState<SubTrack[]>([]);
-  const [activeSub, setActiveSub] = useState<string>('');
+  
+  const [subTracks, setSubTracks] = useState<{ id: number; name: string }[]>([]);
+  const [activeSub, setActiveSub] = useState<number>(-1);
 
   useEffect(() => {
     let isMounted = true;
@@ -75,50 +63,14 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
         let manifestUrl = streamInfo.hls_manifest_url;
         if (manifestUrl) manifestUrl = ensureCorsHeaderProxy(generateProperResolvedHfPath(manifestUrl));
 
-        const fonts = (streamInfo.fonts || []).map((f: string) => ensureCorsHeaderProxy(f));
-
-        const parsedAss: SubTrack[] = (streamInfo.ass_subtitles || []).map((sub: any) => ({
-          url: ensureCorsHeaderProxy(generateProperResolvedHfPath(typeof sub === 'string' ? sub : sub.url)),
-          label: (typeof sub === 'string' ? 'Subtitle' : sub.label) + ' (Text)',
-          type: 'ass'
-        }));
-
-        const parsedPgs: SubTrack[] = (streamInfo.pgs_overlays || []).map((sub: any) => ({
-          url: ensureCorsHeaderProxy(generateProperResolvedHfPath(typeof sub === 'string' ? sub : sub.url)),
-          label: (typeof sub === 'string' ? 'Overlay' : sub.label) + ' (Image)',
-          type: 'pgs'
-        }));
-
-        const allSubs: SubTrack[] = [
-          { url: 'off', label: 'Off', type: 'off' }, 
-          ...parsedAss, 
-          ...parsedPgs
-        ];
-        
-        setSubTracks(allSubs);
-
-        let initialJassubUrl = emptyAss;
-        if (allSubs.length > 1) {
-            setActiveSub(allSubs[1].url);
-            
-            if (allSubs[1].type === 'ass') {
-              initialJassubUrl = allSubs[1].url;
-              activeSubTypeRef.current = 'ass';
-            } else if (allSubs[1].type === 'pgs') {
-              activeSubTypeRef.current = 'pgs';
-            }
-        } else {
-            setActiveSub('off');
-        }
-
         const Artplayer = (await import('artplayer')).default;
         const Hls = (await import('hls.js')).default;
-        const artplayerPluginJassub = (await import('artplayer-plugin-jassub')).default;
 
         if (!isMounted || !playerContainerRef.current) return;
 
         const HfBucketsProxyLoader = createHfBucketsProxyLoader(Hls.DefaultConfig.loader, ensureCorsHeaderProxy);
 
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const artOptions: any = {
           container: playerContainerRef.current,
           url: manifestUrl,
@@ -127,7 +79,9 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
           autoplay: true,
           setting: true,
           fullscreen: true,
+          plugins: [], // Emptied - No Jassub needed
           customType: {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             m3u8: function (video: HTMLVideoElement, url: string, artInstance: any) {
               if (Hls.isSupported()) {
                 if (artInstance.hls) artInstance.hls.destroy();
@@ -138,9 +92,6 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
                   maxBufferLength: 120,
                   maxMaxBufferLength: 180,
                   maxBufferSize: 100 * 1024 * 1024,
-                  manifestLoadingTimeOut: 15000,
-                  fragLoadingTimeOut: 30000,
-                  lowLatencyMode: false
                 });
 
                 hlsRef.current = hls;
@@ -154,14 +105,36 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
                   if (data.fatal && data.type === Hls.ErrorTypes.NETWORK_ERROR) hls.startLoad();
                 });
 
+                // Audio Parsing & Prefix Resolution
                 hls.on(Hls.Events.AUDIO_TRACKS_UPDATED, (_, data) => {
                   if (data.audioTracks && data.audioTracks.length > 0) {
-                    const tracks = data.audioTracks.map((track: any, index: number) => ({
-                      id: index,
-                      name: track.name || track.lang || track.language || `Audio Track ${index + 1}`
-                    }));
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    const tracks = data.audioTracks.map((track: any, index: number) => {
+                      let rawName = track.name || track.lang || track.language || `Audio Track ${index + 1}`;
+                      
+                      // Prettify pipeline prefix tags
+                      if (rawName.startsWith('U_')) rawName = rawName.replace('U_', '') + ' (Original)';
+                      else if (rawName.startsWith('P_')) rawName = rawName.replace('P_', '') + ' (Standard)';
+                      else if (rawName.startsWith('M_')) rawName = rawName.replace('M_', '') + ' (Night Mode/Dialog)';
+
+                      return { id: index, name: rawName };
+                    });
                     setAudioTracks(tracks);
                     setActiveAudio(hls.audioTrack !== -1 ? hls.audioTrack : 0);
+                  }
+                });
+
+                // Native VTT Subtitle Extraction
+                hls.on(Hls.Events.SUBTITLE_TRACKS_UPDATED, (_, data) => {
+                  if (data.subtitleTracks && data.subtitleTracks.length > 0) {
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    const tracks = data.subtitleTracks.map((track: any, index: number) => ({
+                      id: index,
+                      name: track.name || track.lang || track.language || `Subtitle Track ${index + 1}`
+                    }));
+                    
+                    setSubTracks([{ id: -1, name: 'Off' }, ...tracks]);
+                    setActiveSub(hls.subtitleTrack !== -1 ? hls.subtitleTrack : -1);
                   }
                 });
 
@@ -172,65 +145,10 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
           }
         };
 
-        artOptions.plugins = [
-          artplayerPluginJassub({
-            debug: false,
-            subUrl: initialJassubUrl,
-            fonts: fonts,
-            workerUrl: '/jassub-worker.js',
-            wasmUrl: '/jassub-worker.wasm',
-            modernWasmUrl: '/jassub-worker.wasm',
-          })
-        ];
-
         artRef.current = new Artplayer(artOptions);
-        
-        artRef.current.on('ready', () => {
-           const canvas = document.createElement('canvas');
-           canvas.style.position = 'absolute';
-           canvas.style.top = '0';
-           canvas.style.left = '0';
-           canvas.style.width = '100%';
-           canvas.style.height = '100%';
-           canvas.style.objectFit = 'contain'; 
-           canvas.style.pointerEvents = 'none';
-           canvas.style.zIndex = '20'; 
-           
-           canvas.width = 1920;
-           canvas.height = 1080;
-           
-           artRef.current.template.$player.appendChild(canvas);
-
-           // @ts-ignore
-           const offscreen = canvas.transferControlToOffscreen();
-           
-           const worker = new Worker('/pgs-worker.js');
-           pgsWorkerRef.current = worker;
-
-           worker.postMessage({
-               type: 'INIT',
-               canvas: offscreen,
-               url: activeSubTypeRef.current === 'pgs' ? allSubs[1].url : null
-           }, [offscreen]);
-
-           // Optimized Anti-Spam Frame Sync
-           const startSyncEngine = () => {
-               if (activeSubTypeRef.current === 'pgs' && pgsWorkerRef.current && artRef.current) {
-                   const rawTime = artRef.current.video ? artRef.current.video.currentTime : artRef.current.currentTime;
-                   
-                   // Only post a message if the time has actually advanced or retreated
-                   if (rawTime !== lastSentTimeRef.current) {
-                       pgsWorkerRef.current.postMessage({ type: 'TIME', time: rawTime || 0 });
-                       lastSentTimeRef.current = rawTime;
-                   }
-               }
-               syncLoopRef.current = requestAnimationFrame(startSyncEngine);
-           };
-           syncLoopRef.current = requestAnimationFrame(startSyncEngine);
-        });
-
         setIsLoading(false);
 
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       } catch (err: any) {
         if (isMounted) {
           setErrorMsg(err.message || 'An unknown error occurred loading the stream client.');
@@ -243,11 +161,6 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
 
     return () => {
       isMounted = false;
-      if (syncLoopRef.current) cancelAnimationFrame(syncLoopRef.current);
-      if (pgsWorkerRef.current) {
-          pgsWorkerRef.current.postMessage({ type: 'CLEAR' });
-          pgsWorkerRef.current.terminate();
-      }
       if (hlsRef.current) hlsRef.current.destroy();
       if (artRef.current) artRef.current.destroy(true);
     };
@@ -260,54 +173,11 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
     }
   };
 
-  // Helper function to safely route the URL to the Jassub WebAssembly Instance
-  const switchJassubTrack = (url: string) => {
-    if (!artRef.current) return;
-    const p = artRef.current.plugins?.artplayerPluginJassub;
-    if (!p) return;
-
-    // FIX: The plugin object contains the raw engine inside the `.instance` property
-    if (p.instance && typeof p.instance.setTrackByUrl === 'function') {
-      p.instance.setTrackByUrl(url);
-    } else if (typeof p.setTrackByUrl === 'function') {
-      p.setTrackByUrl(url);
-    } else if (typeof p.switchSubtitle === 'function') {
-      p.switchSubtitle(url);
-    } else if (typeof p.switch === 'function') {
-      p.switch(url);
-    } else {
-      console.warn("Jassub plugin found, but unable to locate track switching method.", p);
+  const switchSubtitle = (trackId: number) => {
+    if (hlsRef.current) {
+      hlsRef.current.subtitleTrack = trackId;
+      setActiveSub(trackId);
     }
-  };
-
-  const switchSubtitle = (sub: SubTrack) => {
-    if (!artRef.current) return;
-    
-    if (sub.type === 'ass') {
-       activeSubTypeRef.current = 'ass';
-       
-       if (pgsWorkerRef.current) {
-           pgsWorkerRef.current.postMessage({ type: 'CLEAR' });
-       }
-       
-       switchJassubTrack(sub.url);
-    } 
-    else if (sub.type === 'pgs') {
-       activeSubTypeRef.current = 'pgs';
-
-       switchJassubTrack(emptyAss);
-
-       if (pgsWorkerRef.current) {
-           pgsWorkerRef.current.postMessage({ type: 'LOAD', url: sub.url });
-       }
-    }
-    else {
-       activeSubTypeRef.current = 'none';
-       if (pgsWorkerRef.current) pgsWorkerRef.current.postMessage({ type: 'CLEAR' });
-       switchJassubTrack(emptyAss);
-    }
-    
-    setActiveSub(sub.url);
   };
 
   return (
@@ -364,16 +234,16 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
             </span>
             <div className="flex flex-wrap gap-2 bg-neutral-950 p-2 rounded-2xl border border-neutral-900 w-fit justify-end">
               {subTracks.length > 0 ? (
-                subTracks.map((sub, idx) => (
+                subTracks.map((sub) => (
                   <button
-                    key={idx}
-                    onClick={() => switchSubtitle(sub)}
-                    className={`px-4 py-2 rounded-xl text-xs tracking-wider transition-all duration-200 ${activeSub === sub.url
+                    key={sub.id}
+                    onClick={() => switchSubtitle(sub.id)}
+                    className={`px-4 py-2 rounded-xl text-xs tracking-wider transition-all duration-200 ${activeSub === sub.id
                       ? 'bg-blue-500 text-white font-bold shadow-md shadow-blue-500/20'
                       : 'bg-transparent text-neutral-400 hover:bg-neutral-900 hover:text-neutral-200'
                       }`}
                   >
-                    {sub.label}
+                    {sub.name}
                   </button>
                 ))
               ) : (
