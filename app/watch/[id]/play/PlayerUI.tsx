@@ -80,6 +80,10 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
           url: ensureCorsHeaderProxy(generateProperResolvedHfPath(typeof sub === 'string' ? sub : sub.url))
         }));
 
+        if (parsedPgs.length > 0) {
+          setSubTracks([{ id: 'off', name: 'Off', type: 'off' }, ...parsedPgs]);
+        }
+
         const Artplayer = (await import('artplayer')).default;
         const Hls = (await import('hls.js')).default;
 
@@ -137,6 +141,7 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
                 });
 
                 // Native VTT Subtitle Extraction + Fusion with static PGS tracks
+                // Native VTT Subtitle Extraction + Fusion with static PGS tracks
                 hls.on(Hls.Events.SUBTITLE_TRACKS_UPDATED, (_, data) => {
                   if (data.subtitleTracks && data.subtitleTracks.length > 0) {
                     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -148,9 +153,12 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
                     }));
                     
                     setSubTracks([{ id: 'off', name: 'Off', type: 'off' }, ...vttTracks, ...parsedPgs]);
-                    setActiveSub(hls.subtitleTrack !== -1 ? `vtt_${hls.subtitleTrack}` : 'off');
-                  } else {
-                    setSubTracks([{ id: 'off', name: 'Off', type: 'off' }, ...parsedPgs]);
+                    
+                    // Safely set active sub without overwriting if a user already selected a PGS track
+                    setActiveSub((prev) => {
+                      if (prev !== 'off' && prev.startsWith('pgs_')) return prev;
+                      return hls.subtitleTrack !== -1 ? `vtt_${hls.subtitleTrack}` : 'off';
+                    });
                   }
                 });
 
