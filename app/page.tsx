@@ -1,29 +1,13 @@
 import Link from 'next/link'
 import Image from 'next/image'
+import { getCatalogData } from '@/lib/catalog'
 
-const CATALOG_URL = 'https://huggingface.co/buckets/Gravatar44/xkca/resolve/global_catalog.json'
-
-interface CatalogItem {
-  id: number
-  type: 'movie' | 'series'
-  title: string
-  year: string
-  date_added: number
-  available_resolutions?: string[]
-  available_variations?: string[]
-  hls_manifest_url?: Record<string, string>
-  series_metadata_url?: string
-  poster_url: string
-}
-
-export const revalidate = 3
+// Sync route cache with the catalog cache
+export const revalidate = 3600 
 
 export default async function CatalogGrid() {
-  const res = await fetch(CATALOG_URL, {
-    next: { revalidate: 3 }
-  })
-
-  const catalog: CatalogItem[] = await res.json()
+  // 2. DATA LAYER: Instantly retrieves from server memory
+  const { catalog } = await getCatalogData()
 
   return (
     <main className="max-w-screen-2xl mx-auto p-4 md:p-8">
@@ -40,7 +24,8 @@ export default async function CatalogGrid() {
                 src={item.poster_url}
                 alt={item.title}
                 fill
-                priority={i < 6}
+                // 3. VISUAL LAYER: Prioritize above-the-fold images to optimize LCP
+                priority={i < 12}
                 sizes="(max-width:640px) 50vw, (max-width:768px) 33vw, (max-width:1024px) 25vw, (max-width:1280px) 16vw, 14vw"
                 className="object-cover"
               />

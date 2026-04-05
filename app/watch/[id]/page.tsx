@@ -1,15 +1,7 @@
 import { preload } from 'react-dom'
 import Link from 'next/link'
 import Image from 'next/image'
-
-const CATALOG_URL = 'https://huggingface.co/buckets/Gravatar44/xkca/resolve/global_catalog.json'
-
-interface CatalogItem {
-  id: number
-  type: 'movie' | 'series'
-  hls_manifest_url?: Record<string, string>
-  series_metadata_url?: string
-}
+import { getCatalogData } from '@/lib/catalog'
 
 interface Episode {
   season_number: number
@@ -41,15 +33,23 @@ interface DeepMetadata {
   hls_manifest_url?: string
   episodes?: Episode[]
   available_variations?: string[]
-  metadata_url?: Record<string, string> // Added to map variations easily
+  metadata_url?: Record<string, string>
+}
+
+// 1. ROUTE LAYER: Pre-compiles all movie detail pages into static HTML at build time!
+// This drops Time-to-First-Byte (TTFB) to near zero.
+export async function generateStaticParams() {
+  const { catalog } = await getCatalogData()
+  return catalog.map((item) => ({
+    id: item.id.toString(),
+  }))
 }
 
 async function fetchDeepMetadata(id: string): Promise<DeepMetadata | null> {
-  const catRes = await fetch(CATALOG_URL, { next: { revalidate: 3 } })
-  if (!catRes.ok) return null
-
-  const catalog: CatalogItem[] = await catRes.json()
-  const entry = catalog.find((i) => i.id.toString() === id)
+  // 2. DATA LAYER: O(1) Instant Dictionary Lookup instead of looping over massive arrays
+  const { catalogMap } = await getCatalogData()
+  const entry = catalogMap.get(id)
+  
   if (!entry) return null
 
   let metaUrl = ''
@@ -58,36 +58,30 @@ async function fetchDeepMetadata(id: string): Promise<DeepMetadata | null> {
 
   if (entry.type === 'movie' && entry.hls_manifest_url) {
     variations = Object.keys(entry.hls_manifest_url)
-
-    // Replace master.m3u8 with metadata.json AND inject /resolve/ after your bucket name
     metaUrl = entry.hls_manifest_url[variations[0]]
       .replace('master.m3u8', 'metadata.json')
       .replace('/xkca/', '/xkca/resolve/')
-
     rawManifestUrls = entry.hls_manifest_url
   } else if (entry.type === 'series' && entry.series_metadata_url) {
-
-    // Inject /resolve/ after your bucket name for TV shows as well
     metaUrl = entry.series_metadata_url.replace('/xkca/', '/xkca/resolve/')
-
   } else {
     return null
   }
 
-  const metaRes = await fetch(metaUrl, { cache: 'no-store' })
+  // Uses ISR to keep this lightning fast
+  const metaRes = await fetch(metaUrl, { next: { revalidate: 3600 } })
   if (!metaRes.ok) return null
 
   const deepMetadata: DeepMetadata = await metaRes.json()
 
   if (variations.length > 0) {
     deepMetadata.available_variations = variations
-    deepMetadata.metadata_url = rawManifestUrls // Pass manifest dictionary to UI
+    deepMetadata.metadata_url = rawManifestUrls 
   }
 
   return deepMetadata
 }
 
-// Utility to group flat episode arrays by season_number
 function groupEpisodesBySeason(episodes: Episode[]) {
   const grouped: Record<number, Episode[]> = {}
   episodes.forEach(ep => {
@@ -127,9 +121,25 @@ export default async function WatchPage(props: {
   const isSeries = data.type === 'series'
   const groupedSeasons = isSeries && data.episodes ? groupEpisodesBySeason(data.episodes) : null
   const showEpisodeView = isSeries && activeSeason && groupedSeasons && groupedSeasons[Number(activeSeason)]
-
-  // The episodes to render if we are in the episode view
   const activeEpisodes = showEpisodeView ? groupedSeasons[Number(activeSeason)] : []
+
+  // =========================================================================
+  // 4. UX LAYER: EAGER NODE SERVER CACHE WARM-UP
+  // We execute background fetches right here on the server component. 
+  // This caches the downstream metadata.json in Next.js's memory. When the 
+  // user clicks "Play", the /play route renders instantly without waiting!
+  // =========================================================================
+  if (data.type === 'movie' && data.metadata_url) {
+    Object.values(data.metadata_url).forEach(url => {
+      const warmupUrl = url.replace('master.m3u8', 'metadata.json').replace('/xkca/', '/xkca/resolve/');
+      fetch(warmupUrl, { next: { revalidate: 3600 } }).catch(() => {});
+    });
+  } else if (showEpisodeView && activeEpisodes.length > 0) {
+    activeEpisodes.forEach(ep => {
+      const warmupUrl = ep.hls_manifest_url.replace('master.m3u8', 'metadata.json').replace('/xkca/', '/xkca/resolve/');
+      fetch(warmupUrl, { next: { revalidate: 3600 } }).catch(() => {});
+    });
+  }
 
   return (
     <main className="bg-black text-white">
@@ -174,9 +184,6 @@ export default async function WatchPage(props: {
           {/* RIGHT SIDE CONTENT CONTAINER */}
           <div className={`flex-1 md:px-12 lg:px-16 select-none h-full flex flex-col ${showEpisodeView ? 'mt-24 pb-24 overflow-y-auto custom-scrollbar' : 'mt-50 justify-center'}`}>
 
-            {/* ========================================================== */}
-            {/* VIEW A: DETAIL & SELECTOR VIEW (Movies or Anime Main Page) */}
-            {/* ========================================================== */}
             {!showEpisodeView && (
               <div className="max-w-3xl flex flex-col gap-4">
                 <h1 className="text-4xl md:text-4xl font-bold tracking-tight drop-shadow-lg">
@@ -199,7 +206,7 @@ export default async function WatchPage(props: {
                       {data.available_variations.map((variation) => (
                         <Link
                           key={variation}
-                          // Safely construct the metadata URL to pass to the player
+                          prefetch={true} // Triggers background RSC fetching in Next.js
                           href={`/watch/${id}/play?metaUrl=${encodeURIComponent(data.metadata_url![variation].replace('master.m3u8', 'metadata.json'))}`}
                           className="px-6 py-3 rounded-lg border-2 border-neutral-800 hover:border-neutral-400 hover:text-white text-neutral-300 transition-colors font-mono text-sm tracking-widest bg-neutral-900/50 hover:bg-neutral-800 text-center"
                         >
@@ -230,13 +237,8 @@ export default async function WatchPage(props: {
               </div>
             )}
 
-            {/* ========================================================== */}
-            {/* VIEW B: EPISODE LIST VIEW (Anime Only, Active Season)      */}
-            {/* ========================================================== */}
             {showEpisodeView && (
               <div className="max-w-3xl flex flex-col w-full pr-8">
-
-                {/* Back Button & Contextual Header */}
                 <div className="mb-8 flex flex-col gap-2">
                   <Link
                     href={`/watch/${id}`}
@@ -249,10 +251,8 @@ export default async function WatchPage(props: {
                   </h2>
                 </div>
 
-                {/* Vertical Episode Bars */}
                 <div className="flex flex-col gap-3">
                   {activeEpisodes.map((ep) => {
-                    // String replacement to generate proper resolve link for episode metadata
                     const episodeMetaUrl = ep.hls_manifest_url
                       .replace('master.m3u8', 'metadata.json')
                       .replace('/xkca/', '/xkca/resolve/')
@@ -260,6 +260,7 @@ export default async function WatchPage(props: {
                     return (
                       <Link
                         key={`${ep.season_number}-${ep.episode_number}`}
+                        prefetch={true} // RSC Payload Prefetch
                         href={`/watch/${id}/play?metaUrl=${encodeURIComponent(episodeMetaUrl)}`}
                         className="flex items-center justify-between p-4 bg-neutral-900/40 rounded-xl transition-all duration-100 group hover:bg-neutral-900 hover:translate-x-2"
                       >
@@ -285,18 +286,5 @@ export default async function WatchPage(props: {
         </div>
       </section>
     </main>
-  )
-}
-
-function Badge({ text, highlight = false }: { text: string, highlight?: boolean }) {
-  return (
-    <span
-      className={`px-2 py-1 rounded border ${highlight
-        ? 'bg-neutral-800 border-neutral-500 text-neutral-200'
-        : 'bg-neutral-900 border-neutral-800 text-neutral-500'
-        }`}
-    >
-      {text}
-    </span>
   )
 }
