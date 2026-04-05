@@ -36,17 +36,26 @@ interface DeepMetadata {
   metadata_url?: Record<string, string>
 }
 
-// 1. ROUTE LAYER: Pre-compiles all movie detail pages into static HTML at build time!
-// This drops Time-to-First-Byte (TTFB) to near zero.
-export async function generateStaticParams() {
-  const { catalog } = await getCatalogData()
-  return catalog.map((item) => ({
-    id: item.id.toString(),
-  }))
+// 1. THE TIMEOUT WRAPPER: Used for Deep Metadata fetches
+async function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutMs = 5000) {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, { ...options, signal: controller.signal });
+    clearTimeout(id);
+    return response;
+  } catch (error) {
+    clearTimeout(id);
+    throw error;
+  }
 }
 
+// Notice we REMOVED generateStaticParams() completely. 
+// We are now doing "On-Demand ISR". This spreads the network load across 
+// user clicks rather than bombarding HF all at once during server boot.
+
 async function fetchDeepMetadata(id: string): Promise<DeepMetadata | null> {
-  // 2. DATA LAYER: O(1) Instant Dictionary Lookup instead of looping over massive arrays
+  // DATA LAYER: O(1) Instant Dictionary Lookup
   const { catalogMap } = await getCatalogData()
   const entry = catalogMap.get(id)
   
@@ -68,18 +77,23 @@ async function fetchDeepMetadata(id: string): Promise<DeepMetadata | null> {
     return null
   }
 
-  // Uses ISR to keep this lightning fast
-  const metaRes = await fetch(metaUrl, { next: { revalidate: 3600 } })
-  if (!metaRes.ok) return null
+  try {
+    // 2. TIMEOUT INJECTION: Protects the server from hanging on this specific movie
+    const metaRes = await fetchWithTimeout(metaUrl, { next: { revalidate: 3600 } }, 5000)
+    if (!metaRes.ok) return null
 
-  const deepMetadata: DeepMetadata = await metaRes.json()
+    const deepMetadata: DeepMetadata = await metaRes.json()
 
-  if (variations.length > 0) {
-    deepMetadata.available_variations = variations
-    deepMetadata.metadata_url = rawManifestUrls 
+    if (variations.length > 0) {
+      deepMetadata.available_variations = variations
+      deepMetadata.metadata_url = rawManifestUrls 
+    }
+
+    return deepMetadata
+  } catch (error) {
+    console.error(`🚨 Metadata fetch failed or timed out for ID: ${id}`, error);
+    return null;
   }
-
-  return deepMetadata
 }
 
 function groupEpisodesBySeason(episodes: Episode[]) {
@@ -107,13 +121,13 @@ export default async function WatchPage(props: {
 
   if (!data) {
     return (
-      <div className="flex h-screen items-center justify-center text-neutral-500 font-mono tracking-widest">
-        404 | ASSET NOT FOUND
+      <div className="flex h-screen items-center justify-center text-neutral-500 font-mono tracking-widest flex-col gap-4">
+        <span>404 | ASSET NOT FOUND</span>
+        <span className="text-xs text-neutral-600">(Or Hugging Face Sync Delayed)</span>
       </div>
     )
   }
 
-  // Preload the first available manifest if it's a movie to warm up the connection
   if (data.type === 'movie' && data.hls_manifest_url) {
     preload(data.hls_manifest_url, { as: 'fetch', crossOrigin: 'anonymous' })
   }
@@ -123,31 +137,13 @@ export default async function WatchPage(props: {
   const showEpisodeView = isSeries && activeSeason && groupedSeasons && groupedSeasons[Number(activeSeason)]
   const activeEpisodes = showEpisodeView ? groupedSeasons[Number(activeSeason)] : []
 
-  // =========================================================================
-  // 4. UX LAYER: EAGER NODE SERVER CACHE WARM-UP
-  // We execute background fetches right here on the server component. 
-  // This caches the downstream metadata.json in Next.js's memory. When the 
-  // user clicks "Play", the /play route renders instantly without waiting!
-  // =========================================================================
-  if (data.type === 'movie' && data.metadata_url) {
-    Object.values(data.metadata_url).forEach(url => {
-      const warmupUrl = url.replace('master.m3u8', 'metadata.json').replace('/xkca/', '/xkca/resolve/');
-      fetch(warmupUrl, { next: { revalidate: 3600 } }).catch(() => {});
-    });
-  } else if (showEpisodeView && activeEpisodes.length > 0) {
-    activeEpisodes.forEach(ep => {
-      const warmupUrl = ep.hls_manifest_url.replace('master.m3u8', 'metadata.json').replace('/xkca/', '/xkca/resolve/');
-      fetch(warmupUrl, { next: { revalidate: 3600 } }).catch(() => {});
-    });
-  }
+  // 3. THE BLEED IS GONE: We deleted the background fetch() loop here.
+  // We now rely purely on the user's browser processing `<Link prefetch={true}>` 
 
   return (
     <main className="bg-black text-white">
-
-      {/* HERO SECTION */}
       <section className="relative h-screen w-full overflow-hidden bg-black">
 
-        {/* BACKDROP - Only render if NOT in the anime episode view */}
         {!showEpisodeView && data.backdrop_url && (
           <div className="absolute top-0 right-0 w-[90vw] h-[85vh] lg:w-[80vw] lg:h-[85vh]">
             <Image
@@ -160,16 +156,11 @@ export default async function WatchPage(props: {
           </div>
         )}
 
-        {/* --- DYNAMIC & PRECISE MASKS --- */}
         <div className="absolute inset-0 bg-gradient-to-r from-black via-black/10 to-transparent pointer-events-none" />
         <div className="absolute inset-x-0 top-[70dvh] h-[10dvh] bg-gradient-to-b from-transparent via-black/50 to-black pointer-events-none" />
         <div className="absolute inset-x-0 bottom-0 top-[80dvh] bg-black pointer-events-none" />
-        {/* ------------------------------- */}
 
-        {/* CONTENT LAYOUT */}
         <div className="relative z-10 h-full w-full flex items-center justify-start">
-
-          {/* POSTER (Position Anchored) */}
           <div className="h-full shrink-0">
             <Image
               src={data.poster_url}
@@ -181,7 +172,6 @@ export default async function WatchPage(props: {
             />
           </div>
 
-          {/* RIGHT SIDE CONTENT CONTAINER */}
           <div className={`flex-1 md:px-12 lg:px-16 select-none h-full flex flex-col ${showEpisodeView ? 'mt-24 pb-24 overflow-y-auto custom-scrollbar' : 'mt-50 justify-center'}`}>
 
             {!showEpisodeView && (
@@ -198,7 +188,6 @@ export default async function WatchPage(props: {
                   <span className="text-yellow-400">★ {data.rating}</span>
                 </div>
 
-                {/* QUALITIES SELECTOR BOX (Movie) */}
                 {data.type === 'movie' && data.available_variations && data.metadata_url && (
                   <div className="mt-4 bg-black p-6 rounded-md shadow-2xl flex flex-col gap-4">
                     <h3 className="text-neutral-500 font-mono text-xs uppercase tracking-widest">Select Quality</h3>
@@ -206,7 +195,7 @@ export default async function WatchPage(props: {
                       {data.available_variations.map((variation) => (
                         <Link
                           key={variation}
-                          prefetch={true} // Triggers background RSC fetching in Next.js
+                          prefetch={true} 
                           href={`/watch/${id}/play?metaUrl=${encodeURIComponent(data.metadata_url![variation].replace('master.m3u8', 'metadata.json'))}`}
                           className="px-6 py-3 rounded-lg border-2 border-neutral-800 hover:border-neutral-400 hover:text-white text-neutral-300 transition-colors font-mono text-sm tracking-widest bg-neutral-900/50 hover:bg-neutral-800 text-center"
                         >
@@ -217,7 +206,6 @@ export default async function WatchPage(props: {
                   </div>
                 )}
 
-                {/* SEASONS SELECTOR BOX (Series) */}
                 {data.type === 'series' && groupedSeasons && Object.keys(groupedSeasons).length > 0 && (
                   <div className="mt-4 bg-black p-6 rounded-md shadow-2xl flex flex-col gap-4">
                     <h3 className="text-neutral-500 font-mono text-xs uppercase tracking-widest">Select Season</h3>
@@ -260,7 +248,7 @@ export default async function WatchPage(props: {
                     return (
                       <Link
                         key={`${ep.season_number}-${ep.episode_number}`}
-                        prefetch={true} // RSC Payload Prefetch
+                        prefetch={true} 
                         href={`/watch/${id}/play?metaUrl=${encodeURIComponent(episodeMetaUrl)}`}
                         className="flex items-center justify-between p-4 bg-neutral-900/40 rounded-xl transition-all duration-100 group hover:bg-neutral-900 hover:translate-x-2"
                       >
@@ -278,10 +266,8 @@ export default async function WatchPage(props: {
                     )
                   })}
                 </div>
-
               </div>
             )}
-
           </div>
         </div>
       </section>
