@@ -40,17 +40,27 @@ export default async function MoviePlayPage(props: {
     );
   }
 
-  let streamInfo = null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let streamInfo: any = null;
   let errorMsg = null;
 
   try {
     const fetchUrl = generateProperResolvedHfPath(metaUrl);
     
-    // DIRECT SERVER FETCH: No CORS issues, no proxy bandwidth used!
-    const response = await fetch(fetchUrl, { cache: 'no-store' });
+    // DIRECT SERVER FETCH WITH ISR
+    const response = await fetch(fetchUrl, { next: { revalidate: 3600 } });
     if (!response.ok) throw new Error(`Failed to fetch metadata: ${response.status}`);
     
     streamInfo = await response.json();
+
+    // PERFORMANCE FIX: Obfuscate the manifest URL key.
+    // This stops Next.js's aggressive automatic string parser from injecting a <link rel="preload"> 
+    // which causes false-positive CORS errors in the browser console.
+    if (streamInfo && streamInfo.hls_manifest_url) {
+      streamInfo._safe_manifest_url = streamInfo.hls_manifest_url;
+      delete streamInfo.hls_manifest_url;
+    }
+
   } catch (err: unknown) {
     errorMsg = (err as Error).message || 'An unknown error occurred loading the stream metadata on the server.';
   }

@@ -4,14 +4,19 @@ let canvasWidth = 1920;
 let canvasHeight = 1080;
 let pgsEvents = [];
 
-// Upgraded to a Map-based LRU Cache
-let imageCache = new Map();
-const MAX_CACHE_SIZE = 150; 
+// RING BUFFER OBJECT POOLING FOR ZERO GC PAUSES
+const POOL_SIZE = 50; 
+const imagePool = new Array(POOL_SIZE).fill(null).map(() => ({ url: null, bitmap: null }));
+let poolHead = 0; 
 
 let currentDrawnSignature = null; 
 const CORS_PROXY_BASE = "https://xkca.dadalapathy756.workers.dev/?url=";
 
-function ensureCorsHeaderProxy(urlToFetch) {
+// Split Routing: Binary media bypasses the proxy
+function ensureSplitRoutedUrl(urlToFetch) {
+    if (urlToFetch.endsWith('.webp') || urlToFetch.endsWith('.ts')) {
+        return urlToFetch; // DIRECT FETCH
+    }
     if (urlToFetch.includes('huggingface.co/buckets/')) {
         return CORS_PROXY_BASE + encodeURIComponent(urlToFetch);
     }
@@ -26,7 +31,7 @@ const parseTC = (tc, fps = 23.976) => {
 
 async function loadBdnXml(xmlUrl) {
     try {
-        const res = await fetch(xmlUrl);
+        const res = await fetch(ensureSplitRoutedUrl(xmlUrl));
         const text = await res.text();
         
         let originalUrl = xmlUrl;
@@ -68,7 +73,6 @@ async function loadBdnXml(xmlUrl) {
                 const imgName = graphicMatch[5].trim();
                 if (imgName === 'None') continue;
 
-                const absoluteImgUrl = `${baseUrl}/${imgName}`;
                 events.push({
                     start: parseTC(inTC, fps),
                     end: parseTC(outTC, fps),
@@ -76,14 +80,14 @@ async function loadBdnXml(xmlUrl) {
                     h: parseInt(graphicMatch[2], 10),
                     x: parseInt(graphicMatch[3], 10),
                     y: parseInt(graphicMatch[4], 10),
-                    url: ensureCorsHeaderProxy(absoluteImgUrl)
+                    url: `${baseUrl}/${imgName}` // Split-routed at fetch time
                 });
             }
         }
         
         pgsEvents = events;
         
-        // Pre-warm the cache with the first few frames
+        // Pre-warm the buffer
         for(let i = 0; i < Math.min(10, events.length); i++) {
             preloadImage(events[i].url);
         }
@@ -93,57 +97,67 @@ async function loadBdnXml(xmlUrl) {
 }
 
 async function preloadImage(url) {
-    if (imageCache.has(url)) {
-        // LRU bump: If it already exists, move it to the end (most recently used)
-        const bmp = imageCache.get(url);
-        imageCache.delete(url);
-        imageCache.set(url, bmp);
-        return;
+    if (imagePool.some(slot => slot.url === url)) return; // Already fetching or fully cached
+    
+    // Allocate the next slot in the ring buffer
+    const slotIndex = poolHead;
+    poolHead = (poolHead + 1) % POOL_SIZE;
+    const targetSlot = imagePool[slotIndex];
+    
+    // Explicitly free GPU memory of the old bitmap BEFORE overwriting (Zero GC Pause strategy)
+    if (targetSlot.bitmap) {
+        targetSlot.bitmap.close(); 
     }
     
+    targetSlot.url = url; // Lock the slot
+    targetSlot.bitmap = null; 
+
     try {
-        imageCache.set(url, null); // Set a sync lock to prevent duplicate fetch calls
-        const response = await fetch(url);
+        const directUrl = ensureSplitRoutedUrl(url);
+        const response = await fetch(directUrl, { mode: 'cors' });
         if (!response.ok) throw new Error("Network response was not ok");
         const blob = await response.blob();
         
         const bitmap = await createImageBitmap(blob);
-        imageCache.set(url, bitmap);
         
-        // LRU Eviction Protocol: Purge the oldest frame if we exceed the RAM limit
-        if (imageCache.size > MAX_CACHE_SIZE) {
-            const firstKey = imageCache.keys().next().value;
-            const staleBmp = imageCache.get(firstKey);
-            if (staleBmp) staleBmp.close(); // Explicitly free GPU memory
-            imageCache.delete(firstKey);
+        // Verify the slot wasn't overwritten by a very fast seek while fetching
+        if (targetSlot.url === url) {
+            targetSlot.bitmap = bitmap;
+        } else {
+            bitmap.close(); // Discard if abandoned
         }
 
     } catch (e) {
         console.error("[PGS Worker] Failed to decode WebP", e);
-        imageCache.delete(url); // Remove the lock so it can retry later if needed
+        if (targetSlot.url === url) targetSlot.url = null; 
     }
 }
 
 function drawFrame(time) {
     if (!ctx || pgsEvents.length === 0) return;
 
-    // Lookahead Cache: ensure the next 15 seconds are downloading/cached
+    // Lookahead Cache: ensure the next 15 seconds are queued
     const upcoming = pgsEvents.filter(e => e.end >= time && e.start <= time + 15);
     for(const ev of upcoming) {
-        preloadImage(ev.url); // LRU logic inside handles duplicates automatically
+        preloadImage(ev.url);
     }
 
     const activeEvents = pgsEvents.filter(e => time >= e.start && time <= e.end);
 
     if (activeEvents.length > 0) {
-        const loadedEvents = activeEvents.filter(e => imageCache.has(e.url) && imageCache.get(e.url) !== null);
-        const signature = loadedEvents.map(e => e.url).sort().join('|');
+        // Find active events that are fully loaded in the pool
+        const loadedEvents = [];
+        for (const ev of activeEvents) {
+            const slot = imagePool.find(s => s.url === ev.url && s.bitmap !== null);
+            if (slot) loadedEvents.push({ ev, bitmap: slot.bitmap });
+        }
+
+        const signature = loadedEvents.map(le => le.ev.url).sort().join('|');
 
         if (currentDrawnSignature !== signature) {
             ctx.clearRect(0, 0, canvasWidth, canvasHeight);
-            for (const ev of loadedEvents) {
-                const bmp = imageCache.get(ev.url);
-                ctx.drawImage(bmp, ev.x, ev.y, ev.w, ev.h);
+            for (const { ev, bitmap } of loadedEvents) {
+                ctx.drawImage(bitmap, ev.x, ev.y, ev.w, ev.h);
             }
             currentDrawnSignature = signature;
         }
@@ -160,7 +174,7 @@ self.onmessage = async (e) => {
         offscreenCanvas = e.data.canvas;
         offscreenCanvas.width = canvasWidth;
         offscreenCanvas.height = canvasHeight;
-        ctx = offscreenCanvas.getContext('2d');
+        ctx = offscreenCanvas.getContext('2d', { alpha: true, desynchronized: true }); // GPU optimized context
         if (e.data.url) await loadBdnXml(e.data.url);
     } else if (e.data.type === 'LOAD') {
         if (ctx) ctx.clearRect(0, 0, canvasWidth, canvasHeight);
@@ -172,9 +186,11 @@ self.onmessage = async (e) => {
         if (ctx) ctx.clearRect(0, 0, canvasWidth, canvasHeight);
         pgsEvents = [];
         currentDrawnSignature = null;
-        for (const [url, bmp] of imageCache.entries()) {
-            if (bmp) bmp.close();
+        for (const slot of imagePool) {
+            if (slot.bitmap) slot.bitmap.close();
+            slot.url = null;
+            slot.bitmap = null;
         }
-        imageCache.clear();
+        poolHead = 0;
     }
 };

@@ -4,6 +4,11 @@ import { useEffect, useRef, useState } from 'react';
 
 const CORS_PROXY_BASE = "https://xkca.dadalapathy756.workers.dev/?url=";
 
+// PARALLEL IMPORTS: Eagerly fetch massive video libraries while React mounts
+const playerLibsPromise = typeof window !== 'undefined' 
+  ? Promise.all([import('artplayer').then(m => m.default), import('hls.js').then(m => m.default)])
+  : Promise.resolve([null, null]);
+
 function generateProperResolvedHfPath(u: string): string {
   if (!u || typeof u !== 'string') return u;
   const sanitized = u.split('?download=true')[0].split('&download=true')[0];
@@ -18,8 +23,13 @@ function generateProperResolvedHfPath(u: string): string {
   return sanitized;
 }
 
-function ensureCorsHeaderProxy(rawAbsoluteUrl: string): string {
+// SPLIT-ROUTING: Only proxy text files. Binary media goes direct to Hugging Face.
+function getSplitRoutedUrl(rawAbsoluteUrl: string): string {
   const urlToFetch = generateProperResolvedHfPath(rawAbsoluteUrl);
+  
+  if (/\.(ts|mp4|m4s|webp)$/i.test(urlToFetch)) {
+    return urlToFetch; // Direct CDN Fetch (Saves proxy bandwidth, zero TTFB penalty)
+  }
   if (urlToFetch.includes('huggingface.co/buckets/')) {
     return CORS_PROXY_BASE + encodeURIComponent(urlToFetch);
   }
@@ -48,7 +58,6 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const hlsRef = useRef<any>(null);
 
-  // Canvas & Worker Refs
   const pgsWorkerRef = useRef<Worker | null>(null);
   const syncLoopRef = useRef<number | null>(null);
   const activeSubTypeRef = useRef<'vtt' | 'pgs' | 'none'>('none');
@@ -68,28 +77,54 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
 
     const initializePlayer = async () => {
       try {
-        let manifestUrl = streamInfo.hls_manifest_url;
-        if (manifestUrl) manifestUrl = ensureCorsHeaderProxy(generateProperResolvedHfPath(manifestUrl));
+        // Read from the obfuscated safe URL to bypass Next.js preloaders
+        let manifestUrl = streamInfo._safe_manifest_url || streamInfo.hls_manifest_url;
+        if (manifestUrl) manifestUrl = getSplitRoutedUrl(generateProperResolvedHfPath(manifestUrl));
 
-        // Pre-parse the PGS overlays from HuggingFace metadata
+        // Pre-parse the PGS overlays
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const parsedPgs: SubTrack[] = (streamInfo.pgs_overlays || []).map((sub: any, idx: number) => ({
           id: `pgs_${idx}`,
           name: (typeof sub === 'string' ? 'Overlay' : sub.label) + ' (Image)',
           type: 'pgs',
-          url: ensureCorsHeaderProxy(generateProperResolvedHfPath(typeof sub === 'string' ? sub : sub.url))
+          url: getSplitRoutedUrl(generateProperResolvedHfPath(typeof sub === 'string' ? sub : sub.url))
         }));
 
         if (parsedPgs.length > 0) {
           setSubTracks([{ id: 'off', name: 'Off', type: 'off' }, ...parsedPgs]);
+          
+          // BACKGROUND XML PREFETCHING: Silently cache the XML in the background
+          if (parsedPgs[0].url) {
+             fetch(parsedPgs[0].url, { priority: 'low' }).catch(() => {});
+          }
         }
 
-        const Artplayer = (await import('artplayer')).default;
-        const Hls = (await import('hls.js')).default;
+        const [Artplayer, Hls] = await playerLibsPromise;
+        if (!Artplayer || !Hls || !isMounted || !playerContainerRef.current) return;
 
-        if (!isMounted || !playerContainerRef.current) return;
+        const HfBucketsProxyLoader = createHfBucketsProxyLoader(Hls.DefaultConfig.loader, getSplitRoutedUrl);
 
-        const HfBucketsProxyLoader = createHfBucketsProxyLoader(Hls.DefaultConfig.loader, ensureCorsHeaderProxy);
+        // HEURISTIC BUFFERS: Safely cast navigator to 'any' to clear TypeScript compiler errors
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const nav = (typeof navigator !== 'undefined' ? navigator : {}) as any;
+        const deviceMemory = nav.deviceMemory || 4; 
+        const connection = nav.connection || nav.mozConnection || nav.webkitConnection;
+        const effectiveType = connection ? connection.effectiveType : '4g';
+        const downlink = connection ? connection.downlink : 10;
+        
+        let dynamicMaxBufferSize = 100 * 1024 * 1024; // 100MB Default
+        let dynamicMaxBufferLength = 120;
+        let dynamicMaxMaxBufferLength = 180;
+        
+        if (deviceMemory < 4 || effectiveType === '3g') {
+            dynamicMaxBufferSize = 30 * 1024 * 1024; // Limit to 30MB for weak phones
+            dynamicMaxBufferLength = 30;
+            dynamicMaxMaxBufferLength = 60;
+        } else if (deviceMemory >= 8 && downlink > 15) {
+            dynamicMaxBufferSize = 150 * 1024 * 1024; // 150MB for Desktops on strong Wi-Fi
+            dynamicMaxBufferLength = 240;
+            dynamicMaxMaxBufferLength = 360;
+        }
 
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const artOptions: any = {
@@ -109,9 +144,9 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
                 const hls = new Hls({
                   loader: HfBucketsProxyLoader as any,
                   enableWorker: true,
-                  maxBufferLength: 120,
-                  maxMaxBufferLength: 180,
-                  maxBufferSize: 100 * 1024 * 1024,
+                  maxBufferLength: dynamicMaxBufferLength,
+                  maxMaxBufferLength: dynamicMaxMaxBufferLength,
+                  maxBufferSize: dynamicMaxBufferSize,
                 });
 
                 hlsRef.current = hls;
@@ -140,8 +175,6 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
                   }
                 });
 
-                // Native VTT Subtitle Extraction + Fusion with static PGS tracks
-                // Native VTT Subtitle Extraction + Fusion with static PGS tracks
                 hls.on(Hls.Events.SUBTITLE_TRACKS_UPDATED, (_, data) => {
                   if (data.subtitleTracks && data.subtitleTracks.length > 0) {
                     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -153,8 +186,6 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
                     }));
                     
                     setSubTracks([{ id: 'off', name: 'Off', type: 'off' }, ...vttTracks, ...parsedPgs]);
-                    
-                    // Safely set active sub without overwriting if a user already selected a PGS track
                     setActiveSub((prev) => {
                       if (prev !== 'off' && prev.startsWith('pgs_')) return prev;
                       return hls.subtitleTrack !== -1 ? `vtt_${hls.subtitleTrack}` : 'off';
@@ -171,7 +202,6 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
 
         artRef.current = new Artplayer(artOptions);
         
-        // Setup Canvas Overlay and Worker on Player Ready
         artRef.current.on('ready', () => {
            const canvas = document.createElement('canvas');
            canvas.style.position = 'absolute';
@@ -182,6 +212,11 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
            canvas.style.objectFit = 'contain'; 
            canvas.style.pointerEvents = 'none';
            canvas.style.zIndex = '20'; 
+           
+           // GPU COMPOSITING: Force the browser to render this on a dedicated GPU layer
+           canvas.style.willChange = 'transform';
+           canvas.style.transform = 'translateZ(0)';
+           canvas.style.backfaceVisibility = 'hidden';
            
            canvas.width = 1920;
            canvas.height = 1080;
@@ -197,15 +232,12 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
            worker.postMessage({
                type: 'INIT',
                canvas: offscreen,
-               url: null // Don't load anything yet
+               url: null 
            }, [offscreen]);
 
-           // Optimized Anti-Spam Frame Sync
            const startSyncEngine = () => {
                if (activeSubTypeRef.current === 'pgs' && pgsWorkerRef.current && artRef.current) {
                    const rawTime = artRef.current.video ? artRef.current.video.currentTime : artRef.current.currentTime;
-                   
-                   // Only post a message if the time has actually advanced or retreated
                    if (rawTime !== lastSentTimeRef.current) {
                        pgsWorkerRef.current.postMessage({ type: 'TIME', time: rawTime || 0 });
                        lastSentTimeRef.current = rawTime;
@@ -253,27 +285,17 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
 
     if (track.type === 'vtt') {
        activeSubTypeRef.current = 'vtt';
-       if (hlsRef.current && track.hlsId !== undefined) {
-         hlsRef.current.subtitleTrack = track.hlsId;
-       }
-       if (pgsWorkerRef.current) {
-           pgsWorkerRef.current.postMessage({ type: 'CLEAR' });
-       }
+       if (hlsRef.current && track.hlsId !== undefined) hlsRef.current.subtitleTrack = track.hlsId;
+       if (pgsWorkerRef.current) pgsWorkerRef.current.postMessage({ type: 'CLEAR' });
     } 
     else if (track.type === 'pgs') {
        activeSubTypeRef.current = 'pgs';
-       if (hlsRef.current) {
-         hlsRef.current.subtitleTrack = -1; // Disable native text tracks
-       }
-       if (pgsWorkerRef.current) {
-           pgsWorkerRef.current.postMessage({ type: 'LOAD', url: track.url });
-       }
+       if (hlsRef.current) hlsRef.current.subtitleTrack = -1; 
+       if (pgsWorkerRef.current) pgsWorkerRef.current.postMessage({ type: 'LOAD', url: track.url });
     }
     else {
        activeSubTypeRef.current = 'none';
-       if (hlsRef.current) {
-         hlsRef.current.subtitleTrack = -1;
-       }
+       if (hlsRef.current) hlsRef.current.subtitleTrack = -1;
        if (pgsWorkerRef.current) pgsWorkerRef.current.postMessage({ type: 'CLEAR' });
     }
     
