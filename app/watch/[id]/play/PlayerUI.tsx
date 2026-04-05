@@ -38,6 +38,8 @@ const createHfBucketsProxyLoader = (BaseLoader: any, proxyFn: (url: string) => s
   };
 };
 
+type SubTrack = { id: string; name: string; type: 'vtt' | 'pgs' | 'off'; hlsId?: number; url?: string };
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
   const playerContainerRef = useRef<HTMLDivElement>(null);
@@ -46,14 +48,20 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const hlsRef = useRef<any>(null);
 
+  // Canvas & Worker Refs
+  const pgsWorkerRef = useRef<Worker | null>(null);
+  const syncLoopRef = useRef<number | null>(null);
+  const activeSubTypeRef = useRef<'vtt' | 'pgs' | 'none'>('none');
+  const lastSentTimeRef = useRef<number>(-1);
+
   const [isLoading, setIsLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   
   const [audioTracks, setAudioTracks] = useState<{ id: number; name: string }[]>([]);
   const [activeAudio, setActiveAudio] = useState<number>(0);
   
-  const [subTracks, setSubTracks] = useState<{ id: number; name: string }[]>([]);
-  const [activeSub, setActiveSub] = useState<number>(-1);
+  const [subTracks, setSubTracks] = useState<SubTrack[]>([]);
+  const [activeSub, setActiveSub] = useState<string>('off');
 
   useEffect(() => {
     let isMounted = true;
@@ -62,6 +70,15 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
       try {
         let manifestUrl = streamInfo.hls_manifest_url;
         if (manifestUrl) manifestUrl = ensureCorsHeaderProxy(generateProperResolvedHfPath(manifestUrl));
+
+        // Pre-parse the PGS overlays from HuggingFace metadata
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const parsedPgs: SubTrack[] = (streamInfo.pgs_overlays || []).map((sub: any, idx: number) => ({
+          id: `pgs_${idx}`,
+          name: (typeof sub === 'string' ? 'Overlay' : sub.label) + ' (Image)',
+          type: 'pgs',
+          url: ensureCorsHeaderProxy(generateProperResolvedHfPath(typeof sub === 'string' ? sub : sub.url))
+        }));
 
         const Artplayer = (await import('artplayer')).default;
         const Hls = (await import('hls.js')).default;
@@ -79,59 +96,6 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
           autoplay: true,
           setting: false,
           fullscreen: true,
-          // screenshot: true,
-          plugins: [], // Emptied - No Jassub needed
-          // controls: [
-          //   {
-          //     position: 'right',
-          //     index: 10,
-          //     html: `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style="opacity: 0.8; transition: opacity 0.2s;"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="4"></circle></svg>`,
-          //     tooltip: 'Capture Frame',
-          //     click: () => {
-          //       // Safely grab the player instance using the React Ref instead of 'this'
-          //       const art = artRef.current;
-          //       if (!art) return;
-                
-          //       const video = art.video;
-                
-          //       if (!video || video.readyState < 2) {
-          //         art.notice.show = 'Stream not ready to capture';
-          //         return;
-          //       }
-
-          //       const canvas = document.createElement('canvas');
-          //       canvas.width = video.videoWidth;   
-          //       canvas.height = video.videoHeight; 
-                
-          //       const ctx = canvas.getContext('2d');
-          //       if (!ctx) return;
-                
-          //       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-          //       const time = art.currentTime;
-          //       const hrs = Math.floor(time / 3600).toString().padStart(2, '0');
-          //       const mins = Math.floor((time % 3600) / 60).toString().padStart(2, '0');
-          //       const secs = Math.floor(time % 60).toString().padStart(2, '0');
-          //       const timestamp = hrs !== '00' ? `${hrs}-${mins}-${secs}` : `${mins}-${secs}`;
-
-          //       canvas.toBlob((blob) => {
-          //         if (!blob) return;
-          //         const url = URL.createObjectURL(blob);
-                  
-          //         const a = document.createElement('a');
-          //         a.href = url;
-          //         a.download = `Capture_${canvas.width}x${canvas.height}_[${timestamp}].png`;
-          //         document.body.appendChild(a);
-          //         a.click();
-                  
-          //         document.body.removeChild(a);
-          //         URL.revokeObjectURL(url);
-                  
-          //         art.notice.show = 'High-quality screenshot saved!';
-          //       }, 'image/png', 1.0); 
-          //     },
-          //   },
-          // ],
           customType: {
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             m3u8: function (video: HTMLVideoElement, url: string, artInstance: any) {
@@ -157,18 +121,14 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
                   if (data.fatal && data.type === Hls.ErrorTypes.NETWORK_ERROR) hls.startLoad();
                 });
 
-                // Audio Parsing & Prefix Resolution
                 hls.on(Hls.Events.AUDIO_TRACKS_UPDATED, (_, data) => {
                   if (data.audioTracks && data.audioTracks.length > 0) {
                     // eslint-disable-next-line @typescript-eslint/no-explicit-any
                     const tracks = data.audioTracks.map((track: any, index: number) => {
                       let rawName = track.name || track.lang || track.language || `Audio Track ${index + 1}`;
-                      
-                      // Prettify pipeline prefix tags
                       if (rawName.startsWith('U_')) rawName = rawName.replace('U_', '');
                       else if (rawName.startsWith('P_')) rawName = rawName.replace('P_', '');
                       else if (rawName.startsWith('M_')) rawName = '[C] '+rawName.replace('M_', '');
-
                       return { id: index, name: rawName };
                     });
                     setAudioTracks(tracks);
@@ -176,17 +136,21 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
                   }
                 });
 
-                // Native VTT Subtitle Extraction
+                // Native VTT Subtitle Extraction + Fusion with static PGS tracks
                 hls.on(Hls.Events.SUBTITLE_TRACKS_UPDATED, (_, data) => {
                   if (data.subtitleTracks && data.subtitleTracks.length > 0) {
                     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                    const tracks = data.subtitleTracks.map((track: any, index: number) => ({
-                      id: index,
-                      name: track.name || track.lang || track.language || `Subtitle Track ${index + 1}`
+                    const vttTracks: SubTrack[] = data.subtitleTracks.map((track: any, index: number) => ({
+                      id: `vtt_${index}`,
+                      hlsId: index,
+                      name: (track.name || track.lang || track.language || `Subtitle Track ${index + 1}`) + ' (Text)',
+                      type: 'vtt'
                     }));
                     
-                    setSubTracks([{ id: -1, name: 'Off' }, ...tracks]);
-                    setActiveSub(hls.subtitleTrack !== -1 ? hls.subtitleTrack : -1);
+                    setSubTracks([{ id: 'off', name: 'Off', type: 'off' }, ...vttTracks, ...parsedPgs]);
+                    setActiveSub(hls.subtitleTrack !== -1 ? `vtt_${hls.subtitleTrack}` : 'off');
+                  } else {
+                    setSubTracks([{ id: 'off', name: 'Off', type: 'off' }, ...parsedPgs]);
                   }
                 });
 
@@ -198,6 +162,52 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
         };
 
         artRef.current = new Artplayer(artOptions);
+        
+        // Setup Canvas Overlay and Worker on Player Ready
+        artRef.current.on('ready', () => {
+           const canvas = document.createElement('canvas');
+           canvas.style.position = 'absolute';
+           canvas.style.top = '0';
+           canvas.style.left = '0';
+           canvas.style.width = '100%';
+           canvas.style.height = '100%';
+           canvas.style.objectFit = 'contain'; 
+           canvas.style.pointerEvents = 'none';
+           canvas.style.zIndex = '20'; 
+           
+           canvas.width = 1920;
+           canvas.height = 1080;
+           
+           artRef.current.template.$player.appendChild(canvas);
+
+           // @ts-ignore
+           const offscreen = canvas.transferControlToOffscreen();
+           
+           const worker = new Worker('/pgs-worker.js');
+           pgsWorkerRef.current = worker;
+
+           worker.postMessage({
+               type: 'INIT',
+               canvas: offscreen,
+               url: null // Don't load anything yet
+           }, [offscreen]);
+
+           // Optimized Anti-Spam Frame Sync
+           const startSyncEngine = () => {
+               if (activeSubTypeRef.current === 'pgs' && pgsWorkerRef.current && artRef.current) {
+                   const rawTime = artRef.current.video ? artRef.current.video.currentTime : artRef.current.currentTime;
+                   
+                   // Only post a message if the time has actually advanced or retreated
+                   if (rawTime !== lastSentTimeRef.current) {
+                       pgsWorkerRef.current.postMessage({ type: 'TIME', time: rawTime || 0 });
+                       lastSentTimeRef.current = rawTime;
+                   }
+               }
+               syncLoopRef.current = requestAnimationFrame(startSyncEngine);
+           };
+           syncLoopRef.current = requestAnimationFrame(startSyncEngine);
+        });
+
         setIsLoading(false);
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -213,6 +223,11 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
 
     return () => {
       isMounted = false;
+      if (syncLoopRef.current) cancelAnimationFrame(syncLoopRef.current);
+      if (pgsWorkerRef.current) {
+          pgsWorkerRef.current.postMessage({ type: 'CLEAR' });
+          pgsWorkerRef.current.terminate();
+      }
       if (hlsRef.current) hlsRef.current.destroy();
       if (artRef.current) artRef.current.destroy(true);
     };
@@ -225,11 +240,36 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
     }
   };
 
-  const switchSubtitle = (trackId: number) => {
-    if (hlsRef.current) {
-      hlsRef.current.subtitleTrack = trackId;
-      setActiveSub(trackId);
+  const switchSubtitle = (track: SubTrack) => {
+    if (!artRef.current) return;
+
+    if (track.type === 'vtt') {
+       activeSubTypeRef.current = 'vtt';
+       if (hlsRef.current && track.hlsId !== undefined) {
+         hlsRef.current.subtitleTrack = track.hlsId;
+       }
+       if (pgsWorkerRef.current) {
+           pgsWorkerRef.current.postMessage({ type: 'CLEAR' });
+       }
+    } 
+    else if (track.type === 'pgs') {
+       activeSubTypeRef.current = 'pgs';
+       if (hlsRef.current) {
+         hlsRef.current.subtitleTrack = -1; // Disable native text tracks
+       }
+       if (pgsWorkerRef.current) {
+           pgsWorkerRef.current.postMessage({ type: 'LOAD', url: track.url });
+       }
     }
+    else {
+       activeSubTypeRef.current = 'none';
+       if (hlsRef.current) {
+         hlsRef.current.subtitleTrack = -1;
+       }
+       if (pgsWorkerRef.current) pgsWorkerRef.current.postMessage({ type: 'CLEAR' });
+    }
+    
+    setActiveSub(track.id);
   };
 
   return (
@@ -289,7 +329,7 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
                 subTracks.map((sub) => (
                   <button
                     key={sub.id}
-                    onClick={() => switchSubtitle(sub.id)}
+                    onClick={() => switchSubtitle(sub)}
                     className={`px-4 py-2 rounded-xl text-xs tracking-wider transition-all duration-200 ${activeSub === sub.id
                       ? 'bg-blue-500 text-white font-bold shadow-md shadow-blue-500/20'
                       : 'bg-transparent text-neutral-400 hover:bg-neutral-900 hover:text-neutral-200'
