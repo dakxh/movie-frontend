@@ -58,11 +58,18 @@ async function fetchDeepMetadata(id: string): Promise<DeepMetadata | null> {
 
   if (entry.type === 'movie' && entry.hls_manifest_url) {
     variations = Object.keys(entry.hls_manifest_url)
-    // String replacement to dynamically locate the JSON metadata
-    metaUrl = entry.hls_manifest_url[variations[0]].replace('master.m3u8', 'metadata.json')
-    rawManifestUrls = entry.hls_manifest_url // Store raw manifests for routing
+
+    // Replace master.m3u8 with metadata.json AND inject /resolve/ after your bucket name
+    metaUrl = entry.hls_manifest_url[variations[0]]
+      .replace('master.m3u8', 'metadata.json')
+      .replace('/xkca/', '/xkca/resolve/')
+
+    rawManifestUrls = entry.hls_manifest_url
   } else if (entry.type === 'series' && entry.series_metadata_url) {
-    metaUrl = entry.series_metadata_url
+
+    // Inject /resolve/ after your bucket name for TV shows as well
+    metaUrl = entry.series_metadata_url.replace('/xkca/', '/xkca/resolve/')
+
   } else {
     return null
   }
@@ -184,15 +191,6 @@ export default async function WatchPage(props: {
                   <span className="text-yellow-400">★ {data.rating}</span>
                 </div>
 
-                <div className="flex flex-wrap gap-2 text-[10px] font-mono uppercase tracking-wider drop-shadow-md">
-                  <Badge text={data.quality || '1080P'} />
-                  <Badge text={data.source} />
-                  {data.HDR && <Badge text="HDR / DV" highlight />}
-                  {data.IMAX && <Badge text="IMAX ENHANCED" highlight />}
-                  {data.available_audio && <Badge text={`${data.available_audio.length} AUDIO`} />}
-                  {data.available_subs && <Badge text={`${data.available_subs.length} SUBS`} />}
-                </div>
-
                 {/* QUALITIES SELECTOR BOX (Movie) */}
                 {data.type === 'movie' && data.available_variations && data.metadata_url && (
                   <div className="mt-4 bg-black p-6 rounded-md shadow-2xl flex flex-col gap-4">
@@ -257,7 +255,7 @@ export default async function WatchPage(props: {
                     // String replacement to generate proper resolve link for episode metadata
                     const episodeMetaUrl = ep.hls_manifest_url
                       .replace('master.m3u8', 'metadata.json')
-                      .replace('/anime/', '/anime/resolve/')
+                      .replace('/xkca/', '/xkca/resolve/')
 
                     return (
                       <Link

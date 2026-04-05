@@ -77,9 +77,61 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
           type: 'm3u8',
           volume: 0.7,
           autoplay: true,
-          setting: true,
+          setting: false,
           fullscreen: true,
+          // screenshot: true,
           plugins: [], // Emptied - No Jassub needed
+          // controls: [
+          //   {
+          //     position: 'right',
+          //     index: 10,
+          //     html: `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style="opacity: 0.8; transition: opacity 0.2s;"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="4"></circle></svg>`,
+          //     tooltip: 'Capture Frame',
+          //     click: () => {
+          //       // Safely grab the player instance using the React Ref instead of 'this'
+          //       const art = artRef.current;
+          //       if (!art) return;
+                
+          //       const video = art.video;
+                
+          //       if (!video || video.readyState < 2) {
+          //         art.notice.show = 'Stream not ready to capture';
+          //         return;
+          //       }
+
+          //       const canvas = document.createElement('canvas');
+          //       canvas.width = video.videoWidth;   
+          //       canvas.height = video.videoHeight; 
+                
+          //       const ctx = canvas.getContext('2d');
+          //       if (!ctx) return;
+                
+          //       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+          //       const time = art.currentTime;
+          //       const hrs = Math.floor(time / 3600).toString().padStart(2, '0');
+          //       const mins = Math.floor((time % 3600) / 60).toString().padStart(2, '0');
+          //       const secs = Math.floor(time % 60).toString().padStart(2, '0');
+          //       const timestamp = hrs !== '00' ? `${hrs}-${mins}-${secs}` : `${mins}-${secs}`;
+
+          //       canvas.toBlob((blob) => {
+          //         if (!blob) return;
+          //         const url = URL.createObjectURL(blob);
+                  
+          //         const a = document.createElement('a');
+          //         a.href = url;
+          //         a.download = `Capture_${canvas.width}x${canvas.height}_[${timestamp}].png`;
+          //         document.body.appendChild(a);
+          //         a.click();
+                  
+          //         document.body.removeChild(a);
+          //         URL.revokeObjectURL(url);
+                  
+          //         art.notice.show = 'High-quality screenshot saved!';
+          //       }, 'image/png', 1.0); 
+          //     },
+          //   },
+          // ],
           customType: {
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             m3u8: function (video: HTMLVideoElement, url: string, artInstance: any) {
@@ -113,9 +165,9 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
                       let rawName = track.name || track.lang || track.language || `Audio Track ${index + 1}`;
                       
                       // Prettify pipeline prefix tags
-                      if (rawName.startsWith('U_')) rawName = rawName.replace('U_', '') + ' (Original)';
-                      else if (rawName.startsWith('P_')) rawName = rawName.replace('P_', '') + ' (Standard)';
-                      else if (rawName.startsWith('M_')) rawName = rawName.replace('M_', '') + ' (Night Mode/Dialog)';
+                      if (rawName.startsWith('U_')) rawName = rawName.replace('U_', '');
+                      else if (rawName.startsWith('P_')) rawName = rawName.replace('P_', '');
+                      else if (rawName.startsWith('M_')) rawName = '[C] '+rawName.replace('M_', '');
 
                       return { id: index, name: rawName };
                     });
