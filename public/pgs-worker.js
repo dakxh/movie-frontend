@@ -1,7 +1,5 @@
 let offscreenCanvas = null;
 let ctx = null;
-let canvasWidth = 1920;
-let canvasHeight = 1080;
 let pgsEvents = [];
 
 // RING BUFFER OBJECT POOLING FOR ZERO GC PAUSES
@@ -44,19 +42,6 @@ async function loadBdnXml(xmlUrl) {
         const fpsMatch = text.match(/FrameRate="([^"]+)"/);
         if (fpsMatch) fps = parseFloat(fpsMatch[1]);
 
-        const vfMatch = text.match(/VideoFormat="([^"]+)"/);
-        if (vfMatch) {
-            const vf = vfMatch[1];
-            if (vf === "720p") { canvasWidth = 1280; canvasHeight = 720; }
-            else if (vf === "480p" || vf === "480i") { canvasWidth = 720; canvasHeight = 480; }
-            else { canvasWidth = 1920; canvasHeight = 1080; }
-        }
-
-        if (offscreenCanvas) {
-            offscreenCanvas.width = canvasWidth;
-            offscreenCanvas.height = canvasHeight;
-        }
-
         const events = [];
         const eventBlockRegex = /<Event\s+InTC="([^"]+)"\s+OutTC="([^"]+)"[^>]*>([\s\S]*?)<\/Event>/g;
         
@@ -66,6 +51,8 @@ async function loadBdnXml(xmlUrl) {
             const outTC = eventMatch[2];
             const innerXML = eventMatch[3];
 
+            // We parse X, Y, W, H but we will IGNORE them during drawing because 
+            // ImageMagick has already trimmed the actual image assets to the bounding box.
             const graphicRegex = /<Graphic\s+Width="(\d+)"\s+Height="(\d+)"\s+X="(\d+)"\s+Y="(\d+)"[^>]*>([^<]+)<\/Graphic>/g;
             let graphicMatch;
             
@@ -76,10 +63,6 @@ async function loadBdnXml(xmlUrl) {
                 events.push({
                     start: parseTC(inTC, fps),
                     end: parseTC(outTC, fps),
-                    w: parseInt(graphicMatch[1], 10),
-                    h: parseInt(graphicMatch[2], 10),
-                    x: parseInt(graphicMatch[3], 10),
-                    y: parseInt(graphicMatch[4], 10),
                     url: `${baseUrl}/${imgName}` // Split-routed at fetch time
                 });
             }
@@ -155,15 +138,31 @@ function drawFrame(time) {
         const signature = loadedEvents.map(le => le.ev.url).sort().join('|');
 
         if (currentDrawnSignature !== signature) {
-            ctx.clearRect(0, 0, canvasWidth, canvasHeight);
-            for (const { ev, bitmap } of loadedEvents) {
-                ctx.drawImage(bitmap, ev.x, ev.y, ev.w, ev.h);
+            
+            if (loadedEvents.length > 0) {
+                const primaryBitmap = loadedEvents[0].bitmap;
+                
+                // DYNAMIC RESIZING: Instantly map the OffscreenCanvas to the trimmed ImageMagick bounding box
+                if (offscreenCanvas.width !== primaryBitmap.width || offscreenCanvas.height !== primaryBitmap.height) {
+                    offscreenCanvas.width = primaryBitmap.width;
+                    offscreenCanvas.height = primaryBitmap.height;
+                }
+                
+                ctx.clearRect(0, 0, offscreenCanvas.width, offscreenCanvas.height);
+                
+                // Draw at 0, 0 because the padding has been eradicated
+                for (const { bitmap } of loadedEvents) {
+                    ctx.drawImage(bitmap, 0, 0);
+                }
+            } else {
+                ctx.clearRect(0, 0, offscreenCanvas.width, offscreenCanvas.height);
             }
+            
             currentDrawnSignature = signature;
         }
     } else {
         if (currentDrawnSignature !== null) {
-            ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+            ctx.clearRect(0, 0, offscreenCanvas.width, offscreenCanvas.height);
             currentDrawnSignature = null;
         }
     }
@@ -172,18 +171,19 @@ function drawFrame(time) {
 self.onmessage = async (e) => {
     if (e.data.type === 'INIT') {
         offscreenCanvas = e.data.canvas;
-        offscreenCanvas.width = canvasWidth;
-        offscreenCanvas.height = canvasHeight;
+        // Default to a tiny canvas initially until the first image forces a resize
+        offscreenCanvas.width = 10;
+        offscreenCanvas.height = 10;
         ctx = offscreenCanvas.getContext('2d', { alpha: true, desynchronized: true }); // GPU optimized context
         if (e.data.url) await loadBdnXml(e.data.url);
     } else if (e.data.type === 'LOAD') {
-        if (ctx) ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+        if (ctx) ctx.clearRect(0, 0, offscreenCanvas.width, offscreenCanvas.height);
         currentDrawnSignature = null;
         await loadBdnXml(e.data.url);
     } else if (e.data.type === 'TIME') {
         drawFrame(e.data.time);
     } else if (e.data.type === 'CLEAR') {
-        if (ctx) ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+        if (ctx) ctx.clearRect(0, 0, offscreenCanvas.width, offscreenCanvas.height);
         pgsEvents = [];
         currentDrawnSignature = null;
         for (const slot of imagePool) {
