@@ -77,11 +77,9 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
 
     const initializePlayer = async () => {
       try {
-        // Read from the obfuscated safe URL to bypass Next.js preloaders
         let manifestUrl = streamInfo._safe_manifest_url || streamInfo.hls_manifest_url;
         if (manifestUrl) manifestUrl = getSplitRoutedUrl(generateProperResolvedHfPath(manifestUrl));
 
-        // Pre-parse the PGS overlays
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const parsedPgs: SubTrack[] = (streamInfo.pgs_overlays || []).map((sub: any, idx: number) => ({
           id: `pgs_${idx}`,
@@ -93,7 +91,6 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
         if (parsedPgs.length > 0) {
           setSubTracks([{ id: 'off', name: 'Off', type: 'off' }, ...parsedPgs]);
           
-          // BACKGROUND XML PREFETCHING: Silently cache the XML in the background
           if (parsedPgs[0].url) {
              fetch(parsedPgs[0].url, { priority: 'low' }).catch(() => {});
           }
@@ -104,7 +101,6 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
 
         const HfBucketsProxyLoader = createHfBucketsProxyLoader(Hls.DefaultConfig.loader, getSplitRoutedUrl);
 
-        // HEURISTIC BUFFERS: Safely cast navigator to 'any' to clear TypeScript compiler errors
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const nav = (typeof navigator !== 'undefined' ? navigator : {}) as any;
         const deviceMemory = nav.deviceMemory || 4; 
@@ -112,16 +108,16 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
         const effectiveType = connection ? connection.effectiveType : '4g';
         const downlink = connection ? connection.downlink : 10;
         
-        let dynamicMaxBufferSize = 100 * 1024 * 1024; // 100MB Default
+        let dynamicMaxBufferSize = 100 * 1024 * 1024; 
         let dynamicMaxBufferLength = 120;
         let dynamicMaxMaxBufferLength = 180;
         
         if (deviceMemory < 4 || effectiveType === '3g') {
-            dynamicMaxBufferSize = 30 * 1024 * 1024; // Limit to 30MB for weak phones
+            dynamicMaxBufferSize = 30 * 1024 * 1024; 
             dynamicMaxBufferLength = 30;
             dynamicMaxMaxBufferLength = 60;
         } else if (deviceMemory >= 8 && downlink > 15) {
-            dynamicMaxBufferSize = 150 * 1024 * 1024; // 150MB for Desktops on strong Wi-Fi
+            dynamicMaxBufferSize = 150 * 1024 * 1024; 
             dynamicMaxBufferLength = 240;
             dynamicMaxMaxBufferLength = 360;
         }
@@ -204,22 +200,27 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
         
         artRef.current.on('ready', () => {
            const canvas = document.createElement('canvas');
+           
+           // --- NEW: DYNAMIC BOUNDING BOX CSS ---
+           // We style the canvas exactly like a standard VTT subtitle wrapper
            canvas.style.position = 'absolute';
-           canvas.style.top = '0';
-           canvas.style.left = '0';
-           canvas.style.width = '100%';
-           canvas.style.height = '100%';
+           canvas.style.bottom = '8%'; // Anchor to bottom of screen
+           canvas.style.left = '50%';  // Center horizontally
+           
+           // Hardware acceleration + perfect horizontal centering
+           canvas.style.transform = 'translateX(-50%) translateZ(0)'; 
+           
+           // Constrain the bounding box so it scales gracefully on ultrawide or mobile
+           canvas.style.maxWidth = '85%'; 
+           canvas.style.maxHeight = '20%'; 
            canvas.style.objectFit = 'contain'; 
+           
            canvas.style.pointerEvents = 'none';
            canvas.style.zIndex = '20'; 
-           
-           // GPU COMPOSITING: Force the browser to render this on a dedicated GPU layer
-           canvas.style.willChange = 'transform';
-           canvas.style.transform = 'translateZ(0)';
+           canvas.style.willChange = 'contents';
            canvas.style.backfaceVisibility = 'hidden';
            
-           canvas.width = 1920;
-           canvas.height = 1080;
+           // NOTE: We intentionally DO NOT set canvas.width=1920 or canvas.height=1080 here anymore.
            
            artRef.current.template.$player.appendChild(canvas);
 
