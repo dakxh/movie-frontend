@@ -23,12 +23,11 @@ function generateProperResolvedHfPath(u: string): string {
   return sanitized;
 }
 
-// SPLIT-ROUTING: Only proxy text files. Binary media goes direct to Hugging Face.
 function getSplitRoutedUrl(rawAbsoluteUrl: string): string {
   const urlToFetch = generateProperResolvedHfPath(rawAbsoluteUrl);
   
   if (/\.(ts|mp4|m4s|webp)$/i.test(urlToFetch)) {
-    return urlToFetch; // Direct CDN Fetch (Saves proxy bandwidth, zero TTFB penalty)
+    return urlToFetch; 
   }
   if (urlToFetch.includes('huggingface.co/buckets/')) {
     return CORS_PROXY_BASE + encodeURIComponent(urlToFetch);
@@ -36,7 +35,6 @@ function getSplitRoutedUrl(rawAbsoluteUrl: string): string {
   return urlToFetch;
 }
 
-// Factory function to create the HLS Loader class
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const createHfBucketsProxyLoader = (BaseLoader: any, proxyFn: (url: string) => string) => {
   return class HfBucketsProxyLoader extends BaseLoader {
@@ -58,6 +56,7 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const hlsRef = useRef<any>(null);
 
+  const pgsCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const pgsWorkerRef = useRef<Worker | null>(null);
   const syncLoopRef = useRef<number | null>(null);
   const activeSubTypeRef = useRef<'vtt' | 'pgs' | 'none'>('none');
@@ -71,6 +70,36 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
   
   const [subTracks, setSubTracks] = useState<SubTrack[]>([]);
   const [activeSub, setActiveSub] = useState<string>('off');
+
+  // --- NEW: Subtitle Configuration State ---
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [subSize, setSubSize] = useState<number>(0.85); // Default size scaler
+  const [subBottom, setSubBottom] = useState<number>(8); // Default bottom offset %
+
+  // --- NEW: Hotkey Listener for 'J' ---
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Prevent triggering if typing in an input (though none exist here currently, it's good practice)
+      const target = e.target as HTMLElement;
+      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return;
+
+      if (e.key === 'j' || e.key === 'J') {
+        setIsSettingsOpen(prev => !prev);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
+  // --- NEW: Reactive Canvas Styling Engine ---
+  useEffect(() => {
+    if (pgsCanvasRef.current) {
+      // 1. Anchor to user-defined vertical position
+      pgsCanvasRef.current.style.bottom = `${subBottom}%`;
+      // 2. Lock horizontally (-50% translation) and apply user-defined scale
+      pgsCanvasRef.current.style.transform = `translateX(-50%) scale(${subSize}) translateZ(0)`;
+    }
+  }, [subSize, subBottom]);
 
   useEffect(() => {
     let isMounted = true;
@@ -90,7 +119,6 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
 
         if (parsedPgs.length > 0) {
           setSubTracks([{ id: 'off', name: 'Off', type: 'off' }, ...parsedPgs]);
-          
           if (parsedPgs[0].url) {
              fetch(parsedPgs[0].url, { priority: 'low' }).catch(() => {});
           }
@@ -200,27 +228,25 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
         
         artRef.current.on('ready', () => {
            const canvas = document.createElement('canvas');
-           
-           // --- NEW: DYNAMIC BOUNDING BOX CSS ---
-           // We style the canvas exactly like a standard VTT subtitle wrapper
+           pgsCanvasRef.current = canvas; // Save ref for reactive updates
+
+           // Initial Styles
            canvas.style.position = 'absolute';
-           canvas.style.bottom = '8%'; // Anchor to bottom of screen
-           canvas.style.left = '50%';  // Center horizontally
+           canvas.style.bottom = `${subBottom}%`; 
+           canvas.style.left = '50%';  // Absolute horizontal center
            
-           // Hardware acceleration + perfect horizontal centering
-           canvas.style.transform = 'translateX(-50%) translateZ(0)'; 
+           // Apply scale and force bottom-center origin so it scales correctly
+           canvas.style.transform = `translateX(-50%) scale(${subSize}) translateZ(0)`; 
+           canvas.style.transformOrigin = 'bottom center';
            
-           // Constrain the bounding box so it scales gracefully on ultrawide or mobile
            canvas.style.maxWidth = '85%'; 
            canvas.style.maxHeight = '20%'; 
            canvas.style.objectFit = 'contain'; 
            
            canvas.style.pointerEvents = 'none';
            canvas.style.zIndex = '20'; 
-           canvas.style.willChange = 'contents';
+           canvas.style.willChange = 'contents, transform';
            canvas.style.backfaceVisibility = 'hidden';
-           
-           // NOTE: We intentionally DO NOT set canvas.width=1920 or canvas.height=1080 here anymore.
            
            artRef.current.template.$player.appendChild(canvas);
 
@@ -272,7 +298,8 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
       if (hlsRef.current) hlsRef.current.destroy();
       if (artRef.current) artRef.current.destroy(true);
     };
-  }, [streamInfo]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [streamInfo]); // Intentionally omitting subSize/subBottom to prevent re-initialization
 
   const switchAudio = (trackId: number) => {
     if (hlsRef.current) {
@@ -306,6 +333,50 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
   return (
     <>
       <div className="w-full aspect-video bg-neutral-950 relative border-b border-neutral-900 mt-0">
+        
+        {/* MODAL OVERLAY: Kept inside the player wrapper so it stays visible in fullscreen */}
+        {isSettingsOpen && (
+          <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-black/80 backdrop-blur-md border border-neutral-800 p-6 rounded-2xl z-[9999] flex flex-col gap-5 min-w-[320px] shadow-2xl transition-opacity">
+            <div className="flex justify-between items-center mb-1">
+              <h3 className="text-white font-bold tracking-widest uppercase text-sm">Image Subtitle Tweaks</h3>
+              <button 
+                onClick={() => setIsSettingsOpen(false)} 
+                className="text-neutral-400 hover:text-white transition-colors"
+              >
+                ✕
+              </button>
+            </div>
+            
+            <div className="flex flex-col gap-3">
+              <label className="text-xs text-neutral-400 flex justify-between font-semibold uppercase tracking-wider">
+                <span>Scale Size</span>
+                <span className="text-white">{Math.round(subSize * 100)}%</span>
+              </label>
+              <input 
+                type="range" 
+                min="0.2" max="2.0" step="0.05" 
+                value={subSize} 
+                onChange={(e) => setSubSize(parseFloat(e.target.value))} 
+                className="w-full accent-blue-500 cursor-pointer"
+              />
+            </div>
+
+            <div className="flex flex-col gap-3">
+              <label className="text-xs text-neutral-400 flex justify-between font-semibold uppercase tracking-wider">
+                <span>Vertical Height</span>
+                <span className="text-white">{subBottom}%</span>
+              </label>
+              <input 
+                type="range" 
+                min="0" max="60" step="1" 
+                value={subBottom} 
+                onChange={(e) => setSubBottom(parseFloat(e.target.value))} 
+                className="w-full accent-blue-500 cursor-pointer"
+              />
+            </div>
+          </div>
+        )}
+
         {isLoading && (
           <div className="absolute inset-0 flex items-center justify-center text-neutral-600 text-sm tracking-widest uppercase">
             Initializing Stream Instance...
@@ -352,9 +423,15 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
           </div>
 
           <div className="flex flex-col gap-3 md:items-end">
-            <span className="text-xs text-neutral-600 uppercase tracking-widest font-semibold">
-              Subtitle Override
-            </span>
+            <div className="flex items-center gap-3">
+              <span className="text-xs text-neutral-600 uppercase tracking-widest font-semibold">
+                Subtitle Override
+              </span>
+              <span className="text-[10px] text-neutral-700 uppercase tracking-widest border border-neutral-800 px-2 py-0.5 rounded-full">
+                Press J for Settings
+              </span>
+            </div>
+            
             <div className="flex flex-wrap gap-2 bg-neutral-950 p-2 rounded-2xl border border-neutral-900 w-fit justify-end">
               {subTracks.length > 0 ? (
                 subTracks.map((sub) => (
