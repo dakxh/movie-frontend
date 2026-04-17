@@ -110,9 +110,11 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
         if (manifestUrl) manifestUrl = getSplitRoutedUrl(generateProperResolvedHfPath(manifestUrl));
 
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        // The Worker's API already parses the JSON array.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const parsedPgs: SubTrack[] = (streamInfo.pgs_overlays || []).map((sub: any, idx: number) => ({
           id: `pgs_${idx}`,
-          name: (typeof sub === 'string' ? 'Overlay' : sub.label) + ' (Image)',
+          name: (typeof sub === 'string' ? 'Overlay' : sub.label || `Overlay ${idx + 1}`) + ' (Image)',
           type: 'pgs',
           url: getSplitRoutedUrl(generateProperResolvedHfPath(typeof sub === 'string' ? sub : sub.url))
         }));

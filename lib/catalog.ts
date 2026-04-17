@@ -1,22 +1,47 @@
 import { cache } from 'react';
 
-const CATALOG_URL = 'https://huggingface.co/buckets/Gravatar44/xkca/resolve/global_catalog.json';
+// Replace with your actual deployed worker domain if different
+const API_BASE = 'https://xkca.dadalapathy756.workers.dev/api';
 
-export interface CatalogItem {
-  id: number;
+export interface MediaItem {
+  id: string;
   type: 'movie' | 'series';
   title: string;
-  year: string;
-  date_added: number;
-  available_resolutions?: string[];
-  available_variations?: string[];
-  hls_manifest_url?: Record<string, string>;
-  series_metadata_url?: string;
+  year: number;
+  rating: number;
   poster_url: string;
+  backdrop_url?: string;
+  overview?: string;
 }
 
-// 1. THE NETWORK SHIELD: Forces a strict 5-second timeout on server fetches
-// This prevents Next.js from hanging infinitely if Hugging Face is slow
+export interface Episode {
+  id: string;
+  episode_number: number;
+  episode_name: string;
+  duration?: string;
+  quality?: string;
+}
+
+export interface Season {
+  season_number: number;
+  episodes: Episode[];
+}
+
+export interface MovieSource {
+  id: string;
+  variation_name: string;
+  quality: string;
+  is_imax: number;
+  is_hdr: number;
+  duration?: string;
+}
+
+export interface DeepMetadata extends MediaItem {
+  sources?: MovieSource[];
+  seasons?: Season[];
+}
+
+// THE NETWORK SHIELD: Protects Next.js from hanging
 async function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutMs = 5000) {
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), timeoutMs);
@@ -30,26 +55,58 @@ async function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutM
   }
 }
 
-// O(1) SINGLETON CACHE: Fetches once per hour, instantly parses into a Map.
-export const getCatalogData = cache(async () => {
+// 1. Fetch Homepage Grid (Supports Pagination)
+export const getHomeCatalog = cache(async (limit = 24, offset = 0): Promise<MediaItem[]> => {
   try {
-    // 5-second timeout applied to the catalog fetch
-    const res = await fetchWithTimeout(CATALOG_URL, {
-      next: { revalidate: 3600 } // 1 Hour ISR Cache
-    }, 5000); 
-
+    const res = await fetchWithTimeout(`${API_BASE}/catalog?limit=${limit}&offset=${offset}`, {
+      next: { revalidate: 3600 }
+    });
     if (!res.ok) throw new Error(`Failed to fetch catalog: ${res.status}`);
-
-    const catalog: CatalogItem[] = await res.json();
-    const catalogMap = new Map<string, CatalogItem>();
-
-    // Build the O(1) dictionary lookup
-    catalog.forEach(item => catalogMap.set(item.id.toString(), item));
-
-    return { catalog, catalogMap };
+    return res.json();
   } catch (error) {
-    console.error("🚨 Catalog fetch failed or timed out:", error);
-    // Graceful fallback prevents the entire app from 500ing
-    return { catalog: [], catalogMap: new Map<string, CatalogItem>() };
+    console.error("🚨 API Catalog fetch failed:", error);
+    return [];
+  }
+});
+
+// 2. Fetch Deep Metadata for Details Page
+export const getMediaDetails = cache(async (id: string): Promise<DeepMetadata | null> => {
+  try {
+    const res = await fetchWithTimeout(`${API_BASE}/details/${id}`, {
+      next: { revalidate: 3600 }
+    });
+    if (!res.ok) return null;
+    return res.json();
+  } catch (error) {
+    console.error(`🚨 API Details fetch failed for ID: ${id}`, error);
+    return null;
+  }
+});
+
+// 3. Fetch Stream Engine Payload
+export const getStreamPayload = cache(async (streamId: string) => {
+  try {
+    const res = await fetchWithTimeout(`${API_BASE}/watch/${streamId}`, {
+      next: { revalidate: 3600 }
+    });
+    if (!res.ok) return null;
+    return res.json();
+  } catch (error) {
+    console.error(`🚨 API Stream payload fetch failed for Stream ID: ${streamId}`, error);
+    return null;
+  }
+});
+
+// 4. Expose the High-Speed FTS5 Search Endpoint (For your future search bar)
+export const searchCatalog = cache(async (query: string): Promise<MediaItem[]> => {
+  try {
+    const res = await fetchWithTimeout(`${API_BASE}/search?q=${encodeURIComponent(query)}`, {
+      next: { revalidate: 3600 }
+    });
+    if (!res.ok) return [];
+    return res.json();
+  } catch (error) {
+    console.error(`🚨 API Search failed`, error);
+    return [];
   }
 });

@@ -1,13 +1,11 @@
 import Link from 'next/link'
 import Image from 'next/image'
-import { getCatalogData } from '@/lib/catalog'
+import { getHomeCatalog } from '@/lib/catalog'
 
-// Sync route cache with the catalog cache
 export const revalidate = 3600 
 
 export default async function CatalogGrid() {
-  // 2. DATA LAYER: Instantly retrieves from server memory
-  const { catalog } = await getCatalogData()
+  const catalog = await getHomeCatalog(24, 0) // Limit 24, Offset 0
 
   return (
     <main className="max-w-screen-2xl mx-auto p-4 md:p-8">
@@ -24,12 +22,11 @@ export default async function CatalogGrid() {
                 src={item.poster_url}
                 alt={item.title}
                 fill
-                // 3. VISUAL LAYER: Prioritize above-the-fold images to optimize LCP
                 priority={i < 12}
                 sizes="(max-width:640px) 50vw, (max-width:768px) 33vw, (max-width:1024px) 25vw, (max-width:1280px) 16vw, 14vw"
                 className="object-cover"
               />
-              <div className="absolute top-1 right-1 bg-neutral-950/80 backdrop-blur-md px-1.5 py-0.5 rounded text-[10px] font-mono uppercase">
+              <div className="absolute top-1 right-1 bg-neutral-950/80 backdrop-blur-md px-1.5 py-0.5 rounded text-[10px] font-mono uppercase text-white shadow-md">
                 {item.type}
               </div>
             </div>
@@ -38,8 +35,9 @@ export default async function CatalogGrid() {
               <h2 className="text-sm font-medium leading-tight line-clamp-1 group-hover:text-white">
                 {item.title}
               </h2>
-              <p className="text-xs text-neutral-500 font-mono mt-0.5">
-                {item.year}
+              <p className="text-xs text-neutral-500 font-mono mt-0.5 flex gap-2">
+                <span>{item.year}</span>
+                {item.rating > 0 && <span className="text-yellow-500/80">★ {item.rating}</span>}
               </p>
             </div>
           </Link>
