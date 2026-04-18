@@ -26,7 +26,10 @@ function generateProperResolvedHfPath(u: string): string {
 function getSplitRoutedUrl(rawAbsoluteUrl: string): string {
   const urlToFetch = generateProperResolvedHfPath(rawAbsoluteUrl);
   
-  if (/\.(ts|mp4|m4s|webp)$/i.test(urlToFetch)) {
+  // MODIFIED: Added 'vtt' to the bypass list.
+  // It is crucial that the thumbnails.vtt file bypasses the /?url= proxy. 
+  // Otherwise, the relative paths inside the VTT (e.g., sprite_1.webp) will resolve incorrectly in the browser.
+  if (/\.(ts|mp4|m4s|webp|vtt)$/i.test(urlToFetch)) {
     return urlToFetch; 
   }
   if (urlToFetch.includes('huggingface.co/buckets/')) {
@@ -71,15 +74,13 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
   const [subTracks, setSubTracks] = useState<SubTrack[]>([]);
   const [activeSub, setActiveSub] = useState<string>('off');
 
-  // --- NEW: Subtitle Configuration State ---
+  // Subtitle Configuration State
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [subSize, setSubSize] = useState<number>(0.85); // Default size scaler
-  const [subBottom, setSubBottom] = useState<number>(8); // Default bottom offset %
+  const [subSize, setSubSize] = useState<number>(0.85);
+  const [subBottom, setSubBottom] = useState<number>(8);
 
-  // --- NEW: Hotkey Listener for 'J' ---
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Prevent triggering if typing in an input (though none exist here currently, it's good practice)
       const target = e.target as HTMLElement;
       if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return;
 
@@ -91,12 +92,9 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
-  // --- NEW: Reactive Canvas Styling Engine ---
   useEffect(() => {
     if (pgsCanvasRef.current) {
-      // 1. Anchor to user-defined vertical position
       pgsCanvasRef.current.style.bottom = `${subBottom}%`;
-      // 2. Lock horizontally (-50% translation) and apply user-defined scale
       pgsCanvasRef.current.style.transform = `translateX(-50%) scale(${subSize}) translateZ(0)`;
     }
   }, [subSize, subBottom]);
@@ -109,8 +107,10 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
         let manifestUrl = streamInfo._safe_manifest_url || streamInfo.hls_manifest_url;
         if (manifestUrl) manifestUrl = getSplitRoutedUrl(generateProperResolvedHfPath(manifestUrl));
 
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        // The Worker's API already parses the JSON array.
+        // NEW: Process the Timeline Thumbnails VTT URL
+        let thumbsUrl = streamInfo.timeline_thumbnails_url;
+        if (thumbsUrl) thumbsUrl = getSplitRoutedUrl(generateProperResolvedHfPath(thumbsUrl));
+
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const parsedPgs: SubTrack[] = (streamInfo.pgs_overlays || []).map((sub: any, idx: number) => ({
           id: `pgs_${idx}`,
@@ -161,6 +161,12 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
           autoplay: true,
           setting: false,
           fullscreen: true,
+          // NEW: Activate the scrub thumbnail feature
+          ...(thumbsUrl && {
+            thumbnails: {
+              url: thumbsUrl,
+            }
+          }),
           customType: {
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             m3u8: function (video: HTMLVideoElement, url: string, artInstance: any) {
@@ -230,14 +236,12 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
         
         artRef.current.on('ready', () => {
            const canvas = document.createElement('canvas');
-           pgsCanvasRef.current = canvas; // Save ref for reactive updates
+           pgsCanvasRef.current = canvas; 
 
-           // Initial Styles
            canvas.style.position = 'absolute';
            canvas.style.bottom = `${subBottom}%`; 
-           canvas.style.left = '50%';  // Absolute horizontal center
+           canvas.style.left = '50%';  
            
-           // Apply scale and force bottom-center origin so it scales correctly
            canvas.style.transform = `translateX(-50%) scale(${subSize}) translateZ(0)`; 
            canvas.style.transformOrigin = 'bottom center';
            
@@ -301,7 +305,7 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
       if (artRef.current) artRef.current.destroy(true);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [streamInfo]); // Intentionally omitting subSize/subBottom to prevent re-initialization
+  }, [streamInfo]); 
 
   const switchAudio = (trackId: number) => {
     if (hlsRef.current) {
@@ -336,7 +340,6 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
     <>
       <div className="w-full aspect-video bg-neutral-950 relative border-b border-neutral-900 mt-0">
         
-        {/* MODAL OVERLAY: Kept inside the player wrapper so it stays visible in fullscreen */}
         {isSettingsOpen && (
           <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-black/80 backdrop-blur-md border border-neutral-800 p-6 rounded-2xl z-[9999] flex flex-col gap-5 min-w-[320px] shadow-2xl transition-opacity">
             <div className="flex justify-between items-center mb-1">

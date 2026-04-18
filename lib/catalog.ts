@@ -20,6 +20,7 @@ export interface Episode {
   episode_name: string;
   duration?: string;
   quality?: string;
+  timeline_thumbnails_url?: string; // NEW
 }
 
 export interface Season {
@@ -34,6 +35,7 @@ export interface MovieSource {
   is_imax: number;
   is_hdr: number;
   duration?: string;
+  timeline_thumbnails_url?: string; // NEW
 }
 
 export interface DeepMetadata extends MediaItem {
@@ -59,7 +61,7 @@ async function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutM
 export const getHomeCatalog = cache(async (limit = 24, offset = 0): Promise<MediaItem[]> => {
   try {
     const res = await fetchWithTimeout(`${API_BASE}/catalog?limit=${limit}&offset=${offset}`, {
-      next: { revalidate: 3600 }
+      next: { revalidate: 3 }
     });
     if (!res.ok) throw new Error(`Failed to fetch catalog: ${res.status}`);
     return res.json();
@@ -70,12 +72,20 @@ export const getHomeCatalog = cache(async (limit = 24, offset = 0): Promise<Medi
 });
 
 // 2. Fetch Deep Metadata for Details Page
+// 2. Fetch Deep Metadata for Details Page
 export const getMediaDetails = cache(async (id: string): Promise<DeepMetadata | null> => {
   try {
     const res = await fetchWithTimeout(`${API_BASE}/details/${id}`, {
       next: { revalidate: 3600 }
     });
-    if (!res.ok) return null;
+    
+    if (!res.ok) {
+      // Capture the exact database error instead of failing silently
+      const errorText = await res.text();
+      console.error(`🚨 API Details fetch failed for ID ${id}. Status: ${res.status}. Details: ${errorText}`);
+      return null;
+    }
+    
     return res.json();
   } catch (error) {
     console.error(`🚨 API Details fetch failed for ID: ${id}`, error);
@@ -87,7 +97,7 @@ export const getMediaDetails = cache(async (id: string): Promise<DeepMetadata | 
 export const getStreamPayload = cache(async (streamId: string) => {
   try {
     const res = await fetchWithTimeout(`${API_BASE}/watch/${streamId}`, {
-      next: { revalidate: 3600 }
+      next: { revalidate: 3 }
     });
     if (!res.ok) return null;
     return res.json();
@@ -101,7 +111,7 @@ export const getStreamPayload = cache(async (streamId: string) => {
 export const searchCatalog = cache(async (query: string): Promise<MediaItem[]> => {
   try {
     const res = await fetchWithTimeout(`${API_BASE}/search?q=${encodeURIComponent(query)}`, {
-      next: { revalidate: 3600 }
+      next: { revalidate: 3 }
     });
     if (!res.ok) return [];
     return res.json();

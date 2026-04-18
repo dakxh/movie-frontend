@@ -2,7 +2,7 @@ import Link from 'next/link'
 import Image from 'next/image'
 import { getHomeCatalog } from '@/lib/catalog'
 
-export const revalidate = 3600 
+export const revalidate = 3
 
 export default async function CatalogGrid() {
   const catalog = await getHomeCatalog(24, 0) // Limit 24, Offset 0
