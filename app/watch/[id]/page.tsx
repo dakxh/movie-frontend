@@ -25,9 +25,8 @@ export default async function WatchPage(props: {
   const isSeries = data.type === 'series'
   const showEpisodeView = isSeries && activeSeason && data.seasons
   
-  // Directly pull the pre-grouped season from the API payload
   const activeSeasonData = showEpisodeView ? data.seasons?.find(s => s.season_number === Number(activeSeason)) : null
-  const activeEpisodes = activeSeasonData ? activeSeasonData.episodes : []
+  const activeEpisodes = activeSeasonData ? activeSeasonData.episodes :[]
 
   return (
     <main className="bg-black text-white">
@@ -40,7 +39,7 @@ export default async function WatchPage(props: {
               alt=""
               fill
               priority
-              className="object-contain object-right-top brightness-75"
+              className="object-cover object-right-top brightness-75"
             />
           </div>
         )}
@@ -65,9 +64,7 @@ export default async function WatchPage(props: {
 
             {!showEpisodeView && (
               <div className="max-w-3xl flex flex-col gap-4">
-                <h1 className="text-4xl md:text-5xl font-bold tracking-tight drop-shadow-xl">
-                  {data.title}
-                </h1>
+                <h1 className="text-4xl md:text-5xl font-bold tracking-tight drop-shadow-xl">{data.title}</h1>
 
                 <div className="flex gap-3 text-sm text-neutral-300 drop-shadow-md">
                   <span>{data.year}</span>
@@ -76,12 +73,9 @@ export default async function WatchPage(props: {
                 </div>
                 
                 {data.overview && (
-                  <p className="text-sm text-neutral-400 mt-2 max-w-xl leading-relaxed">
-                    {data.overview}
-                  </p>
+                  <p className="text-sm text-neutral-400 mt-2 max-w-xl leading-relaxed">{data.overview}</p>
                 )}
 
-                {/* DB-Driven Movie Sources */}
                 {data.type === 'movie' && data.sources && (
                   <div className="mt-4 bg-black p-6 rounded-md shadow-2xl flex flex-col gap-4 border border-neutral-900">
                     <h3 className="text-neutral-500 font-mono text-xs uppercase tracking-widest">Select Source</h3>
@@ -89,8 +83,7 @@ export default async function WatchPage(props: {
                       {data.sources.map((src) => (
                         <Link
                           key={src.id}
-                          prefetch={true} 
-                          // Passing the D1 Row ID instead of massive Hugging Face URLs
+                          prefetch={false} // CRITICAL FIX: Eradicates DDOS network load spikes
                           href={`/watch/${id}/play?streamId=${src.id}`}
                           className="px-6 py-3 rounded-lg border-2 border-neutral-800 hover:border-neutral-400 hover:text-white text-neutral-300 transition-colors font-mono text-sm tracking-widest bg-neutral-900/50 hover:bg-neutral-800 text-center flex flex-col gap-1 items-center"
                         >
@@ -107,7 +100,6 @@ export default async function WatchPage(props: {
                   </div>
                 )}
 
-                {/* DB-Driven Series Seasons */}
                 {data.type === 'series' && data.seasons && (
                   <div className="mt-4 bg-black p-6 rounded-md shadow-2xl flex flex-col gap-4 border border-neutral-900">
                     <h3 className="text-neutral-500 font-mono text-xs uppercase tracking-widest">Select Season</h3>
@@ -115,6 +107,7 @@ export default async function WatchPage(props: {
                       {data.seasons.map((season) => (
                         <Link
                           key={season.season_number}
+                          prefetch={false}
                           href={`/watch/${id}?season=${season.season_number}`}
                           className="px-6 py-3 rounded-lg border-2 border-neutral-800 hover:border-neutral-400 hover:text-white text-neutral-300 transition-colors font-mono text-sm tracking-widest bg-neutral-900/50 hover:bg-neutral-800 text-center"
                         >
@@ -127,14 +120,10 @@ export default async function WatchPage(props: {
               </div>
             )}
 
-            {/* DB-Driven Episode List */}
             {showEpisodeView && (
               <div className="max-w-3xl flex flex-col w-full pr-8">
                 <div className="mb-8 flex flex-col gap-2">
-                  <Link
-                    href={`/watch/${id}`}
-                    className="text-neutral-200 hover:text-white font-mono text-xs tracking-widest uppercase mb-2 w-fit"
-                  >
+                  <Link href={`/watch/${id}`} className="text-neutral-200 hover:text-white font-mono text-xs tracking-widest uppercase mb-2 w-fit">
                     ← Back to Seasons
                   </Link>
                   <h2 className="text-xl md:text-2xl font-bold tracking-wide text-neutral-400 uppercase">
@@ -146,8 +135,7 @@ export default async function WatchPage(props: {
                   {activeEpisodes.map((ep) => (
                     <Link
                       key={ep.id}
-                      prefetch={true} 
-                      // Passing the D1 Row ID instead of massive Hugging Face URLs
+                      prefetch={false} // CRITICAL FIX: Stops UI freezing on large episodic renders
                       href={`/watch/${id}/play?streamId=${ep.id}`}
                       className="flex items-center justify-between p-4 bg-neutral-900/40 rounded-xl transition-all duration-100 group hover:bg-neutral-900 hover:translate-x-2 border border-transparent hover:border-neutral-800"
                     >

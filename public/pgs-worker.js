@@ -2,18 +2,20 @@ let offscreenCanvas = null;
 let ctx = null;
 let pgsEvents = [];
 
-// RING BUFFER OBJECT POOLING FOR ZERO GC PAUSES
-const POOL_SIZE = 50; 
-const imagePool = new Array(POOL_SIZE).fill(null).map(() => ({ url: null, bitmap: null }));
-let poolHead = 0; 
+let lastKnownTime = 0; // CRITICAL FIX: Tracks pause state
 
-let currentDrawnSignature = null; 
+// RING BUFFER OBJECT POOLING FOR ZERO GC PAUSES
+const POOL_SIZE = 50;
+const imagePool = new Array(POOL_SIZE).fill(null).map(() => ({ url: null, bitmap: null }));
+let poolHead = 0;
+
+let currentDrawnSignature = null;
 const CORS_PROXY_BASE = "https://xkca.dadalapathy756.workers.dev/?url=";
 
 // Split Routing: Binary media bypasses the proxy
 function ensureSplitRoutedUrl(urlToFetch) {
     if (urlToFetch.endsWith('.webp') || urlToFetch.endsWith('.ts')) {
-        return urlToFetch; // DIRECT FETCH
+        return urlToFetch;
     }
     if (urlToFetch.includes('huggingface.co/buckets/')) {
         return CORS_PROXY_BASE + encodeURIComponent(urlToFetch);
@@ -31,31 +33,29 @@ async function loadBdnXml(xmlUrl) {
     try {
         const res = await fetch(ensureSplitRoutedUrl(xmlUrl));
         const text = await res.text();
-        
+
         let originalUrl = xmlUrl;
         if (xmlUrl.startsWith(CORS_PROXY_BASE)) {
             originalUrl = decodeURIComponent(xmlUrl.replace(CORS_PROXY_BASE, ''));
         }
         const baseUrl = originalUrl.substring(0, originalUrl.lastIndexOf('/'));
-        
+
         let fps = 23.976;
         const fpsMatch = text.match(/FrameRate="([^"]+)"/);
         if (fpsMatch) fps = parseFloat(fpsMatch[1]);
 
         const events = [];
         const eventBlockRegex = /<Event\s+InTC="([^"]+)"\s+OutTC="([^"]+)"[^>]*>([\s\S]*?)<\/Event>/g;
-        
+
         let eventMatch;
         while ((eventMatch = eventBlockRegex.exec(text)) !== null) {
             const inTC = eventMatch[1];
             const outTC = eventMatch[2];
             const innerXML = eventMatch[3];
 
-            // We parse X, Y, W, H but we will IGNORE them during drawing because 
-            // ImageMagick has already trimmed the actual image assets to the bounding box.
             const graphicRegex = /<Graphic\s+Width="(\d+)"\s+Height="(\d+)"\s+X="(\d+)"\s+Y="(\d+)"[^>]*>([^<]+)<\/Graphic>/g;
             let graphicMatch;
-            
+
             while ((graphicMatch = graphicRegex.exec(innerXML)) !== null) {
                 const imgName = graphicMatch[5].trim();
                 if (imgName === 'None') continue;
@@ -63,15 +63,14 @@ async function loadBdnXml(xmlUrl) {
                 events.push({
                     start: parseTC(inTC, fps),
                     end: parseTC(outTC, fps),
-                    url: `${baseUrl}/${imgName}` // Split-routed at fetch time
+                    url: `${baseUrl}/${imgName}`
                 });
             }
         }
-        
+
         pgsEvents = events;
-        
-        // Pre-warm the buffer
-        for(let i = 0; i < Math.min(10, events.length); i++) {
+
+        for (let i = 0; i < Math.min(10, events.length); i++) {
             preloadImage(events[i].url);
         }
     } catch (err) {
@@ -80,55 +79,49 @@ async function loadBdnXml(xmlUrl) {
 }
 
 async function preloadImage(url) {
-    if (imagePool.some(slot => slot.url === url)) return; // Already fetching or fully cached
-    
-    // Allocate the next slot in the ring buffer
+    if (imagePool.some(slot => slot.url === url)) return;
+
     const slotIndex = poolHead;
     poolHead = (poolHead + 1) % POOL_SIZE;
     const targetSlot = imagePool[slotIndex];
-    
-    // Explicitly free GPU memory of the old bitmap BEFORE overwriting (Zero GC Pause strategy)
+
     if (targetSlot.bitmap) {
-        targetSlot.bitmap.close(); 
+        targetSlot.bitmap.close();
     }
-    
-    targetSlot.url = url; // Lock the slot
-    targetSlot.bitmap = null; 
+
+    targetSlot.url = url;
+    targetSlot.bitmap = null;
 
     try {
         const directUrl = ensureSplitRoutedUrl(url);
         const response = await fetch(directUrl, { mode: 'cors' });
         if (!response.ok) throw new Error("Network response was not ok");
         const blob = await response.blob();
-        
+
         const bitmap = await createImageBitmap(blob);
-        
-        // Verify the slot wasn't overwritten by a very fast seek while fetching
+
         if (targetSlot.url === url) {
             targetSlot.bitmap = bitmap;
         } else {
-            bitmap.close(); // Discard if abandoned
+            bitmap.close();
         }
-
     } catch (e) {
         console.error("[PGS Worker] Failed to decode WebP", e);
-        if (targetSlot.url === url) targetSlot.url = null; 
+        if (targetSlot.url === url) targetSlot.url = null;
     }
 }
 
 function drawFrame(time) {
     if (!ctx || pgsEvents.length === 0) return;
 
-    // Lookahead Cache: ensure the next 15 seconds are queued
     const upcoming = pgsEvents.filter(e => e.end >= time && e.start <= time + 15);
-    for(const ev of upcoming) {
+    for (const ev of upcoming) {
         preloadImage(ev.url);
     }
 
     const activeEvents = pgsEvents.filter(e => time >= e.start && time <= e.end);
 
     if (activeEvents.length > 0) {
-        // Find active events that are fully loaded in the pool
         const loadedEvents = [];
         for (const ev of activeEvents) {
             const slot = imagePool.find(s => s.url === ev.url && s.bitmap !== null);
@@ -138,26 +131,24 @@ function drawFrame(time) {
         const signature = loadedEvents.map(le => le.ev.url).sort().join('|');
 
         if (currentDrawnSignature !== signature) {
-            
+
             if (loadedEvents.length > 0) {
                 const primaryBitmap = loadedEvents[0].bitmap;
-                
-                // DYNAMIC RESIZING: Instantly map the OffscreenCanvas to the trimmed ImageMagick bounding box
+
                 if (offscreenCanvas.width !== primaryBitmap.width || offscreenCanvas.height !== primaryBitmap.height) {
                     offscreenCanvas.width = primaryBitmap.width;
                     offscreenCanvas.height = primaryBitmap.height;
                 }
-                
+
                 ctx.clearRect(0, 0, offscreenCanvas.width, offscreenCanvas.height);
-                
-                // Draw at 0, 0 because the padding has been eradicated
+
                 for (const { bitmap } of loadedEvents) {
                     ctx.drawImage(bitmap, 0, 0);
                 }
             } else {
                 ctx.clearRect(0, 0, offscreenCanvas.width, offscreenCanvas.height);
             }
-            
+
             currentDrawnSignature = signature;
         }
     } else {
@@ -169,24 +160,29 @@ function drawFrame(time) {
 }
 
 self.onmessage = async (e) => {
-
     if (e.data.type === 'PRECACHE') {
         if (e.data.url) await loadBdnXml(e.data.url);
     }
     else if (e.data.type === 'INIT') {
         offscreenCanvas = e.data.canvas;
-        // Default to a tiny canvas initially until the first image forces a resize
         offscreenCanvas.width = 10;
         offscreenCanvas.height = 10;
-        ctx = offscreenCanvas.getContext('2d', { alpha: true, desynchronized: true }); // GPU optimized context
+        ctx = offscreenCanvas.getContext('2d', { alpha: true, desynchronized: true });
         if (e.data.url && pgsEvents.length === 0) await loadBdnXml(e.data.url);
-    } else if (e.data.type === 'LOAD') {
+    }
+    else if (e.data.type === 'LOAD') {
         if (ctx) ctx.clearRect(0, 0, offscreenCanvas.width, offscreenCanvas.height);
         currentDrawnSignature = null;
         await loadBdnXml(e.data.url);
-    } else if (e.data.type === 'TIME') {
-        drawFrame(e.data.time);
-    } else if (e.data.type === 'CLEAR') {
+
+        // CRITICAL FIX: Ensure the worker instantly repaints if switched while Paused
+        drawFrame(lastKnownTime);
+    }
+    else if (e.data.type === 'TIME') {
+        lastKnownTime = e.data.time;
+        drawFrame(lastKnownTime);
+    }
+    else if (e.data.type === 'CLEAR') {
         if (ctx) ctx.clearRect(0, 0, offscreenCanvas.width, offscreenCanvas.height);
         pgsEvents = [];
         currentDrawnSignature = null;

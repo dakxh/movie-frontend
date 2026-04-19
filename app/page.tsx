@@ -5,7 +5,7 @@ import { getHomeCatalog } from '@/lib/catalog'
 export const revalidate = 3
 
 export default async function CatalogGrid() {
-  const catalog = await getHomeCatalog(24, 0) // Limit 24, Offset 0
+  const catalog = await getHomeCatalog(24, 0)
 
   return (
     <main className="max-w-screen-2xl mx-auto p-4 md:p-8">
@@ -14,7 +14,6 @@ export default async function CatalogGrid() {
           <Link
             key={item.id}
             href={`/watch/${item.id}`}
-            prefetch={false}
             className="group relative flex flex-col gap-2 hover:-translate-y-1 transition-transform"
           >
             <div className="relative aspect-[2/3] w-full overflow-hidden rounded bg-neutral-900">

@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 
 const CORS_PROXY_BASE = "https://xkca.dadalapathy756.workers.dev/?url=";
 
+// Eagerly initialized out of scope to begin fetching before component mount (Fast TTFF)
 const playerLibsPromise = typeof window !== 'undefined'
   ? Promise.all([
       import('artplayer').then(m => m.default), 
@@ -12,7 +13,6 @@ const playerLibsPromise = typeof window !== 'undefined'
     ])
   : Promise.resolve([null, null, null]);
 
-// Keep these on the client strictly for intercepting dynamic .ts chunk requests from hls.js
 function generateProperResolvedHfPath(u: string): string {
   if (!u || typeof u !== 'string') return u;
   const sanitized = u.split('?download=true')[0].split('&download=true')[0];
@@ -52,14 +52,16 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
   const lastSentTimeRef = useRef<number>(-1);
 
   const [isLoading, setIsLoading] = useState(true);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const[errorMsg, setErrorMsg] = useState<string | null>(null);
+  
   const [audioTracks, setAudioTracks] = useState<{ id: number; name: string }[]>([]);
   const [activeAudio, setActiveAudio] = useState<number>(0);
+  
   const [subTracks, setSubTracks] = useState<SubTrack[]>([]);
   const [activeSub, setActiveSub] = useState<string>('off');
 
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [subSize, setSubSize] = useState<number>(0.85);
+  const[subSize, setSubSize] = useState<number>(0.85);
   const [subBottom, setSubBottom] = useState<number>(8);
 
   useEffect(() => {
@@ -69,27 +71,24 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
+  },[]);
 
   useEffect(() => {
     if (pgsCanvasRef.current) {
       pgsCanvasRef.current.style.bottom = `${subBottom}%`;
       pgsCanvasRef.current.style.transform = `translateX(-50%) scale(${subSize}) translateZ(0)`;
     }
-  }, [subSize, subBottom]);
+  },[subSize, subBottom]);
 
   useEffect(() => {
     let isMounted = true;
 
-
     const initializePlayer = async () => {
       try {
-        // 1. Resolve URLs pre-computed by the Server Component
         const manifestUrl = streamInfo._safe_manifest_url;
         const thumbsUrl = streamInfo._safe_timeline_thumbnails_url;
 
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const parsedPgs: SubTrack[] = (streamInfo.pgs_overlays || []).map((sub: any, idx: number) => ({
+        const parsedPgs: SubTrack[] = (streamInfo.pgs_overlays ||[]).map((sub: any, idx: number) => ({
           id: `pgs_${idx}`,
           name: (sub.label || `Overlay ${idx + 1}`) + ' (Image)',
           type: 'pgs',
@@ -100,13 +99,9 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
           setSubTracks([{ id: 'off', name: 'Off', type: 'off' }, ...parsedPgs]);
         }
 
-        // 2. WORKER PRE-FLIGHT
-        // Start the worker instantly, do not wait for Artplayer
         if (!pgsWorkerRef.current && typeof window !== 'undefined') {
             pgsWorkerRef.current = new Worker('/pgs-worker.js');
         }
-        
-        // Fire the XML to the worker immediately so it parses in the background
         if (parsedPgs.length > 0 && parsedPgs[0].url) {
             pgsWorkerRef.current!.postMessage({ type: 'PRECACHE', url: parsedPgs[0].url });
         }
@@ -116,7 +111,6 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
 
         const HfBucketsProxyLoader = createHfBucketsProxyLoader(Hls.DefaultConfig.loader, getSplitRoutedUrl);
 
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const nav = (typeof navigator !== 'undefined' ? navigator : {}) as any;
         const deviceMemory = nav.deviceMemory || 4; 
         const connection = nav.connection || nav.mozConnection || nav.webkitConnection;
@@ -137,9 +131,6 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
             dynamicMaxMaxBufferLength = 360;
         }
 
-        // 3. HLS PRE-FLIGHT (Network Request Starts NOW)
-        // Instantiate and fetch the manifest immediately. 
-        // HLS.js will consume the <link rel="preload"> cache instantly.
         const hls = new Hls({
           loader: HfBucketsProxyLoader as any,
           enableWorker: true,
@@ -149,10 +140,52 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
         });
         
         hlsRef.current = hls;
+
+        hls.on(Hls.Events.ERROR, (event, data) => {
+          if (data.fatal && data.type === Hls.ErrorTypes.NETWORK_ERROR) hls.startLoad();
+        });
+
+        hls.on(Hls.Events.AUDIO_TRACKS_UPDATED, (_, data) => {
+          if (data.audioTracks && data.audioTracks.length > 0) {
+            const tracks = data.audioTracks.map((track: any, index: number) => {
+              let rawName = track.name || track.lang || track.language || `Audio Track ${index + 1}`;
+              if (rawName.startsWith('U_')) rawName = rawName.replace('U_', '');
+              else if (rawName.startsWith('P_')) rawName = rawName.replace('P_', '');
+              else if (rawName.startsWith('M_')) rawName = '[C] '+rawName.replace('M_', '');
+              return { id: index, name: rawName };
+            });
+            setAudioTracks(tracks);
+          }
+        });
+
+        hls.on(Hls.Events.AUDIO_TRACK_SWITCHED, (_, data) => {
+            setActiveAudio(data.id);
+        });
+
+        hls.on(Hls.Events.SUBTITLE_TRACKS_UPDATED, (_, data) => {
+          if (data.subtitleTracks && data.subtitleTracks.length > 0) {
+            const vttTracks: SubTrack[] = data.subtitleTracks.map((track: any, index: number) => ({
+              id: `vtt_${index}`,
+              hlsId: index,
+              name: (track.name || track.lang || track.language || `Subtitle Track ${index + 1}`) + ' (Text)',
+              type: 'vtt'
+            }));
+            
+            setSubTracks(prev => {
+              const existingPgs = prev.filter(p => p.type === 'pgs');
+              return[{ id: 'off', name: 'Off', type: 'off' }, ...vttTracks, ...existingPgs];
+            });
+
+            // Automatically visually sync the UI if HLS auto-picked a subtitle internally on boot
+            if (hls.subtitleTrack !== -1) {
+              setActiveSub(`vtt_${hls.subtitleTrack}`);
+              activeSubTypeRef.current = 'vtt';
+            }
+          }
+        });
+
         hls.loadSource(manifestUrl);
 
-        // 4. UI INITIALIZATION
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const artOptions: any = {
           container: playerContainerRef.current,
           url: manifestUrl,
@@ -162,59 +195,14 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
           setting: false,
           fullscreen: true,
           plugins: [
-            ...(thumbsUrl && VttThumbnailPlugin ? [
-              VttThumbnailPlugin({
-                vtt: thumbsUrl,
-              })
-            ] : [])
+            ...(thumbsUrl && VttThumbnailPlugin ?[VttThumbnailPlugin({ vtt: thumbsUrl })] :[])
           ],
           customType: {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             m3u8: function (video: HTMLVideoElement, url: string, artInstance: any) {
               if (Hls.isSupported()) {
-                // Attach the already-running HLS instance to the video element
                 hls.attachMedia(video);
                 artInstance.hls = hls;
-
                 artInstance.on('destroy', () => hls.destroy());
-
-                hls.on(Hls.Events.ERROR, function (event, data) {
-                  if (data.fatal && data.type === Hls.ErrorTypes.NETWORK_ERROR) hls.startLoad();
-                });
-
-                hls.on(Hls.Events.AUDIO_TRACKS_UPDATED, (_, data) => {
-                  if (data.audioTracks && data.audioTracks.length > 0) {
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                    const tracks = data.audioTracks.map((track: any, index: number) => {
-                      let rawName = track.name || track.lang || track.language || `Audio Track ${index + 1}`;
-                      if (rawName.startsWith('U_')) rawName = rawName.replace('U_', '');
-                      else if (rawName.startsWith('P_')) rawName = rawName.replace('P_', '');
-                      else if (rawName.startsWith('M_')) rawName = '[C] '+rawName.replace('M_', '');
-                      return { id: index, name: rawName };
-                    });
-                    setAudioTracks(tracks);
-                    setActiveAudio(hls.audioTrack !== -1 ? hls.audioTrack : 0);
-                  }
-                });
-
-                hls.on(Hls.Events.SUBTITLE_TRACKS_UPDATED, (_, data) => {
-                  if (data.subtitleTracks && data.subtitleTracks.length > 0) {
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                    const vttTracks: SubTrack[] = data.subtitleTracks.map((track: any, index: number) => ({
-                      id: `vtt_${index}`,
-                      hlsId: index,
-                      name: (track.name || track.lang || track.language || `Subtitle Track ${index + 1}`) + ' (Text)',
-                      type: 'vtt'
-                    }));
-                    
-                    setSubTracks([{ id: 'off', name: 'Off', type: 'off' }, ...vttTracks, ...parsedPgs]);
-                    setActiveSub((prev) => {
-                      if (prev !== 'off' && prev.startsWith('pgs_')) return prev;
-                      return hls.subtitleTrack !== -1 ? `vtt_${hls.subtitleTrack}` : 'off';
-                    });
-                  }
-                });
-
               } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
                 video.src = url;
               }
@@ -225,6 +213,11 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
         artRef.current = new Artplayer(artOptions);
         
         artRef.current.on('ready', () => {
+           // Prevent ghost canvas leaks between re-renders
+           if (pgsCanvasRef.current) {
+               pgsCanvasRef.current.remove();
+           }
+
            const canvas = document.createElement('canvas');
            pgsCanvasRef.current = canvas; 
 
@@ -245,12 +238,7 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
 
            // @ts-ignore
            const offscreen = canvas.transferControlToOffscreen();
-           
-           // Initialize the worker with the canvas (URL was already sent in PRECACHE)
-           pgsWorkerRef.current!.postMessage({
-               type: 'INIT',
-               canvas: offscreen
-           }, [offscreen]);
+           pgsWorkerRef.current!.postMessage({ type: 'INIT', canvas: offscreen }, [offscreen]);
 
            const startSyncEngine = () => {
                if (activeSubTypeRef.current === 'pgs' && pgsWorkerRef.current && artRef.current) {
@@ -267,7 +255,6 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
 
         setIsLoading(false);
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       } catch (err: any) {
         if (isMounted) {
           setErrorMsg(err.message || 'An unknown error occurred loading the stream client.');
@@ -281,11 +268,27 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
     return () => {
       isMounted = false;
       if (syncLoopRef.current) cancelAnimationFrame(syncLoopRef.current);
-      if (pgsWorkerRef.current) { pgsWorkerRef.current.postMessage({ type: 'CLEAR' }); pgsWorkerRef.current.terminate(); }
-      if (hlsRef.current) hlsRef.current.destroy();
-      if (artRef.current) artRef.current.destroy(true);
+
+      // CRITICAL FIX: Eradicates memory leaks during Next.js Unmount lifecycle
+      if (pgsWorkerRef.current) { 
+        pgsWorkerRef.current.postMessage({ type: 'CLEAR' }); 
+        pgsWorkerRef.current.terminate(); 
+        pgsWorkerRef.current = null;
+      }
+      if (hlsRef.current) {
+        hlsRef.current.destroy();
+        hlsRef.current = null;
+      }
+      if (artRef.current) {
+        artRef.current.destroy(true);
+        artRef.current = null;
+      }
+      if (pgsCanvasRef.current) {
+         pgsCanvasRef.current.remove();
+         pgsCanvasRef.current = null;
+      }
     };
-  }, [streamInfo]);
+  },[streamInfo]);
 
   const switchAudio = (trackId: number) => {
     if (hlsRef.current) {
@@ -301,13 +304,15 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
       activeSubTypeRef.current = 'vtt';
       if (hlsRef.current && track.hlsId !== undefined) hlsRef.current.subtitleTrack = track.hlsId;
       if (pgsWorkerRef.current) pgsWorkerRef.current.postMessage({ type: 'CLEAR' });
-    }
-    else if (track.type === 'pgs') {
+    } else if (track.type === 'pgs') {
       activeSubTypeRef.current = 'pgs';
       if (hlsRef.current) hlsRef.current.subtitleTrack = -1;
-      if (pgsWorkerRef.current) pgsWorkerRef.current.postMessage({ type: 'LOAD', url: track.url });
-    }
-    else {
+      
+      if (pgsWorkerRef.current) {
+        pgsWorkerRef.current.postMessage({ type: 'LOAD', url: track.url });
+        lastSentTimeRef.current = -1; // CRITICAL FIX: Instantly forces canvas to redraw, even if paused
+      }
+    } else {
       activeSubTypeRef.current = 'none';
       if (hlsRef.current) hlsRef.current.subtitleTrack = -1;
       if (pgsWorkerRef.current) pgsWorkerRef.current.postMessage({ type: 'CLEAR' });
@@ -319,45 +324,23 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
   return (
     <>
       <div className="w-full aspect-video bg-neutral-950 relative border-b border-neutral-900 mt-0">
-
         {isSettingsOpen && (
           <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-black/80 backdrop-blur-md border border-neutral-800 p-6 rounded-2xl z-[9999] flex flex-col gap-5 min-w-[320px] shadow-2xl transition-opacity">
             <div className="flex justify-between items-center mb-1">
               <h3 className="text-white font-bold tracking-widest uppercase text-sm">Image Subtitle Tweaks</h3>
-              <button
-                onClick={() => setIsSettingsOpen(false)}
-                className="text-neutral-400 hover:text-white transition-colors"
-              >
-                ✕
-              </button>
+              <button onClick={() => setIsSettingsOpen(false)} className="text-neutral-400 hover:text-white transition-colors">✕</button>
             </div>
-
             <div className="flex flex-col gap-3">
               <label className="text-xs text-neutral-400 flex justify-between font-semibold uppercase tracking-wider">
-                <span>Scale Size</span>
-                <span className="text-white">{Math.round(subSize * 100)}%</span>
+                <span>Scale Size</span><span className="text-white">{Math.round(subSize * 100)}%</span>
               </label>
-              <input
-                type="range"
-                min="0.2" max="2.0" step="0.05"
-                value={subSize}
-                onChange={(e) => setSubSize(parseFloat(e.target.value))}
-                className="w-full accent-blue-500 cursor-pointer"
-              />
+              <input type="range" min="0.2" max="2.0" step="0.05" value={subSize} onChange={(e) => setSubSize(parseFloat(e.target.value))} className="w-full accent-blue-500 cursor-pointer" />
             </div>
-
             <div className="flex flex-col gap-3">
               <label className="text-xs text-neutral-400 flex justify-between font-semibold uppercase tracking-wider">
-                <span>Vertical Height</span>
-                <span className="text-white">{subBottom}%</span>
+                <span>Vertical Height</span><span className="text-white">{subBottom}%</span>
               </label>
-              <input
-                type="range"
-                min="0" max="60" step="1"
-                value={subBottom}
-                onChange={(e) => setSubBottom(parseFloat(e.target.value))}
-                className="w-full accent-blue-500 cursor-pointer"
-              />
+              <input type="range" min="0" max="60" step="1" value={subBottom} onChange={(e) => setSubBottom(parseFloat(e.target.value))} className="w-full accent-blue-500 cursor-pointer" />
             </div>
           </div>
         )}
@@ -370,9 +353,7 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
 
         {errorMsg && (
           <div className="absolute inset-0 flex flex-col gap-4 items-center justify-center bg-black z-40">
-            <span className="text-red-500 text-sm tracking-widest uppercase border border-red-500/30 px-4 py-2 rounded">
-              Stream Failure
-            </span>
+            <span className="text-red-500 text-sm tracking-widest uppercase border border-red-500/30 px-4 py-2 rounded">Stream Failure</span>
             <span className="text-neutral-400 text-xs">{errorMsg}</span>
           </div>
         )}
@@ -382,61 +363,36 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
 
       {!isLoading && !errorMsg && (
         <div className="w-full max-w-screen-2xl mx-auto p-4 md:p-8 flex flex-col md:flex-row justify-between gap-8">
-
           <div className="flex flex-col gap-3">
-            <span className="text-xs text-neutral-600 uppercase tracking-widest font-semibold">
-              Audio Override
-            </span>
+            <span className="text-xs text-neutral-600 uppercase tracking-widest font-semibold">Audio Override</span>
             <div className="flex flex-wrap gap-2 bg-neutral-950 p-2 rounded-2xl border border-neutral-900 w-fit">
               {audioTracks.length > 0 ? (
                 audioTracks.map((track) => (
                   <button
-                    key={track.id}
-                    onClick={() => switchAudio(track.id)}
-                    className={`px-4 py-2 rounded-xl text-xs tracking-wider transition-all duration-200 ${activeAudio === track.id
-                      ? 'bg-white text-black font-bold shadow-md'
-                      : 'bg-transparent text-neutral-400 hover:bg-neutral-900 hover:text-neutral-200'
-                      }`}
-                  >
-                    {track.name}
-                  </button>
+                    key={track.id} onClick={() => switchAudio(track.id)}
+                    className={`px-4 py-2 rounded-xl text-xs tracking-wider transition-all duration-200 ${activeAudio === track.id ? 'bg-white text-black font-bold shadow-md' : 'bg-transparent text-neutral-400 hover:bg-neutral-900 hover:text-neutral-200'}`}
+                  >{track.name}</button>
                 ))
-              ) : (
-                <span className="px-4 py-2 text-xs text-neutral-700">No alternate audio</span>
-              )}
+              ) : (<span className="px-4 py-2 text-xs text-neutral-700">No alternate audio</span>)}
             </div>
           </div>
 
           <div className="flex flex-col gap-3 md:items-end">
             <div className="flex items-center gap-3">
-              <span className="text-xs text-neutral-600 uppercase tracking-widest font-semibold">
-                Subtitle Override
-              </span>
-              <span className="text-[10px] text-neutral-700 uppercase tracking-widest border border-neutral-800 px-2 py-0.5 rounded-full">
-                Press J for Settings
-              </span>
+              <span className="text-xs text-neutral-600 uppercase tracking-widest font-semibold">Subtitle Override</span>
+              <span className="text-[10px] text-neutral-700 uppercase tracking-widest border border-neutral-800 px-2 py-0.5 rounded-full">Press J for Settings</span>
             </div>
-
             <div className="flex flex-wrap gap-2 bg-neutral-950 p-2 rounded-2xl border border-neutral-900 w-fit justify-end">
               {subTracks.length > 0 ? (
                 subTracks.map((sub) => (
                   <button
-                    key={sub.id}
-                    onClick={() => switchSubtitle(sub)}
-                    className={`px-4 py-2 rounded-xl text-xs tracking-wider transition-all duration-200 ${activeSub === sub.id
-                      ? 'bg-blue-500 text-white font-bold shadow-md shadow-blue-500/20'
-                      : 'bg-transparent text-neutral-400 hover:bg-neutral-900 hover:text-neutral-200'
-                      }`}
-                  >
-                    {sub.name}
-                  </button>
+                    key={sub.id} onClick={() => switchSubtitle(sub)}
+                    className={`px-4 py-2 rounded-xl text-xs tracking-wider transition-all duration-200 ${activeSub === sub.id ? 'bg-blue-500 text-white font-bold shadow-md shadow-blue-500/20' : 'bg-transparent text-neutral-400 hover:bg-neutral-900 hover:text-neutral-200'}`}
+                  >{sub.name}</button>
                 ))
-              ) : (
-                <span className="px-4 py-2 text-xs text-neutral-700">No alternate subtitles</span>
-              )}
+              ) : (<span className="px-4 py-2 text-xs text-neutral-700">No alternate subtitles</span>)}
             </div>
           </div>
-
         </div>
       )}
     </>
