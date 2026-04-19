@@ -169,13 +169,17 @@ function drawFrame(time) {
 }
 
 self.onmessage = async (e) => {
-    if (e.data.type === 'INIT') {
+
+    if (e.data.type === 'PRECACHE') {
+        if (e.data.url) await loadBdnXml(e.data.url);
+    }
+    else if (e.data.type === 'INIT') {
         offscreenCanvas = e.data.canvas;
         // Default to a tiny canvas initially until the first image forces a resize
         offscreenCanvas.width = 10;
         offscreenCanvas.height = 10;
         ctx = offscreenCanvas.getContext('2d', { alpha: true, desynchronized: true }); // GPU optimized context
-        if (e.data.url) await loadBdnXml(e.data.url);
+        if (e.data.url && pgsEvents.length === 0) await loadBdnXml(e.data.url);
     } else if (e.data.type === 'LOAD') {
         if (ctx) ctx.clearRect(0, 0, offscreenCanvas.width, offscreenCanvas.height);
         currentDrawnSignature = null;

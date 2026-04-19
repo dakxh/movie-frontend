@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "artplayer": "^5.4.0",
+    "artplayer-plugin-vtt-thumbnail": "^1.1.0",
     "hls.js": "^1.6.15",
     "next": "16.1.6",
     "react": "19.2.3",

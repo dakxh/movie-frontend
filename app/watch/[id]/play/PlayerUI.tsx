@@ -4,44 +4,33 @@ import { useEffect, useRef, useState } from 'react';
 
 const CORS_PROXY_BASE = "https://xkca.dadalapathy756.workers.dev/?url=";
 
-// PARALLEL IMPORTS: Eagerly fetch massive video libraries while React mounts
-const playerLibsPromise = typeof window !== 'undefined' 
-  ? Promise.all([import('artplayer').then(m => m.default), import('hls.js').then(m => m.default)])
-  : Promise.resolve([null, null]);
+const playerLibsPromise = typeof window !== 'undefined'
+  ? Promise.all([
+      import('artplayer').then(m => m.default), 
+      import('hls.js').then(m => m.default),
+      import('artplayer-plugin-vtt-thumbnail').then(m => m.default).catch(() => null)
+    ])
+  : Promise.resolve([null, null, null]);
 
+// Keep these on the client strictly for intercepting dynamic .ts chunk requests from hls.js
 function generateProperResolvedHfPath(u: string): string {
   if (!u || typeof u !== 'string') return u;
   const sanitized = u.split('?download=true')[0].split('&download=true')[0];
-  if (!sanitized.startsWith('https://huggingface.co/buckets/') || sanitized.includes('/resolve/')) {
-    return sanitized;
-  }
+  if (!sanitized.startsWith('https://huggingface.co/buckets/') || sanitized.includes('/resolve/')) return sanitized;
   const parts = sanitized.split('/');
-  if (parts.length > 6) {
-    parts.splice(6, 0, 'resolve');
-    return parts.join('/');
-  }
-  return sanitized;
+  if (parts.length > 6) parts.splice(6, 0, 'resolve');
+  return parts.join('/');
 }
 
 function getSplitRoutedUrl(rawAbsoluteUrl: string): string {
   const urlToFetch = generateProperResolvedHfPath(rawAbsoluteUrl);
-  
-  // MODIFIED: Added 'vtt' to the bypass list.
-  // It is crucial that the thumbnails.vtt file bypasses the /?url= proxy. 
-  // Otherwise, the relative paths inside the VTT (e.g., sprite_1.webp) will resolve incorrectly in the browser.
-  if (/\.(ts|mp4|m4s|webp|vtt)$/i.test(urlToFetch)) {
-    return urlToFetch; 
-  }
-  if (urlToFetch.includes('huggingface.co/buckets/')) {
-    return CORS_PROXY_BASE + encodeURIComponent(urlToFetch);
-  }
+  if (/\.(ts|mp4|m4s|webp|vtt)$/i.test(urlToFetch)) return urlToFetch;
+  if (urlToFetch.includes('huggingface.co/buckets/')) return CORS_PROXY_BASE + encodeURIComponent(urlToFetch);
   return urlToFetch;
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const createHfBucketsProxyLoader = (BaseLoader: any, proxyFn: (url: string) => string) => {
   return class HfBucketsProxyLoader extends BaseLoader {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     load(context: any, config: any, callbacks: any) {
       if (context.url) context.url = proxyFn(context.url);
       super.load(context, config, callbacks);
@@ -51,12 +40,9 @@ const createHfBucketsProxyLoader = (BaseLoader: any, proxyFn: (url: string) => s
 
 type SubTrack = { id: string; name: string; type: 'vtt' | 'pgs' | 'off'; hlsId?: number; url?: string };
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
   const playerContainerRef = useRef<HTMLDivElement>(null);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const artRef = useRef<any>(null);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const hlsRef = useRef<any>(null);
 
   const pgsCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -67,26 +53,19 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
 
   const [isLoading, setIsLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  
   const [audioTracks, setAudioTracks] = useState<{ id: number; name: string }[]>([]);
   const [activeAudio, setActiveAudio] = useState<number>(0);
-  
   const [subTracks, setSubTracks] = useState<SubTrack[]>([]);
   const [activeSub, setActiveSub] = useState<string>('off');
 
-  // Subtitle Configuration State
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [subSize, setSubSize] = useState<number>(0.85);
   const [subBottom, setSubBottom] = useState<number>(8);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      const target = e.target as HTMLElement;
-      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return;
-
-      if (e.key === 'j' || e.key === 'J') {
-        setIsSettingsOpen(prev => !prev);
-      }
+      if ((e.target as HTMLElement).tagName === 'INPUT' || (e.target as HTMLElement).tagName === 'TEXTAREA') return;
+      if (e.key === 'j' || e.key === 'J') setIsSettingsOpen(prev => !prev);
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
@@ -102,31 +81,37 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
   useEffect(() => {
     let isMounted = true;
 
+
     const initializePlayer = async () => {
       try {
-        let manifestUrl = streamInfo._safe_manifest_url || streamInfo.hls_manifest_url;
-        if (manifestUrl) manifestUrl = getSplitRoutedUrl(generateProperResolvedHfPath(manifestUrl));
-
-        // NEW: Process the Timeline Thumbnails VTT URL
-        let thumbsUrl = streamInfo.timeline_thumbnails_url;
-        if (thumbsUrl) thumbsUrl = getSplitRoutedUrl(generateProperResolvedHfPath(thumbsUrl));
+        // 1. Resolve URLs pre-computed by the Server Component
+        const manifestUrl = streamInfo._safe_manifest_url;
+        const thumbsUrl = streamInfo._safe_timeline_thumbnails_url;
 
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const parsedPgs: SubTrack[] = (streamInfo.pgs_overlays || []).map((sub: any, idx: number) => ({
           id: `pgs_${idx}`,
-          name: (typeof sub === 'string' ? 'Overlay' : sub.label || `Overlay ${idx + 1}`) + ' (Image)',
+          name: (sub.label || `Overlay ${idx + 1}`) + ' (Image)',
           type: 'pgs',
-          url: getSplitRoutedUrl(generateProperResolvedHfPath(typeof sub === 'string' ? sub : sub.url))
+          url: sub._safe_url
         }));
 
         if (parsedPgs.length > 0) {
           setSubTracks([{ id: 'off', name: 'Off', type: 'off' }, ...parsedPgs]);
-          if (parsedPgs[0].url) {
-             fetch(parsedPgs[0].url, { priority: 'low' }).catch(() => {});
-          }
         }
 
-        const [Artplayer, Hls] = await playerLibsPromise;
+        // 2. WORKER PRE-FLIGHT
+        // Start the worker instantly, do not wait for Artplayer
+        if (!pgsWorkerRef.current && typeof window !== 'undefined') {
+            pgsWorkerRef.current = new Worker('/pgs-worker.js');
+        }
+        
+        // Fire the XML to the worker immediately so it parses in the background
+        if (parsedPgs.length > 0 && parsedPgs[0].url) {
+            pgsWorkerRef.current!.postMessage({ type: 'PRECACHE', url: parsedPgs[0].url });
+        }
+
+        const [Artplayer, Hls, VttThumbnailPlugin] = await playerLibsPromise;
         if (!Artplayer || !Hls || !isMounted || !playerContainerRef.current) return;
 
         const HfBucketsProxyLoader = createHfBucketsProxyLoader(Hls.DefaultConfig.loader, getSplitRoutedUrl);
@@ -152,6 +137,21 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
             dynamicMaxMaxBufferLength = 360;
         }
 
+        // 3. HLS PRE-FLIGHT (Network Request Starts NOW)
+        // Instantiate and fetch the manifest immediately. 
+        // HLS.js will consume the <link rel="preload"> cache instantly.
+        const hls = new Hls({
+          loader: HfBucketsProxyLoader as any,
+          enableWorker: true,
+          maxBufferLength: dynamicMaxBufferLength,
+          maxMaxBufferLength: dynamicMaxMaxBufferLength,
+          maxBufferSize: dynamicMaxBufferSize,
+        });
+        
+        hlsRef.current = hls;
+        hls.loadSource(manifestUrl);
+
+        // 4. UI INITIALIZATION
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const artOptions: any = {
           container: playerContainerRef.current,
@@ -161,28 +161,18 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
           autoplay: true,
           setting: false,
           fullscreen: true,
-          // NEW: Activate the scrub thumbnail feature
-          ...(thumbsUrl && {
-            thumbnails: {
-              url: thumbsUrl,
-            }
-          }),
+          plugins: [
+            ...(thumbsUrl && VttThumbnailPlugin ? [
+              VttThumbnailPlugin({
+                vtt: thumbsUrl,
+              })
+            ] : [])
+          ],
           customType: {
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             m3u8: function (video: HTMLVideoElement, url: string, artInstance: any) {
               if (Hls.isSupported()) {
-                if (artInstance.hls) artInstance.hls.destroy();
-
-                const hls = new Hls({
-                  loader: HfBucketsProxyLoader as any,
-                  enableWorker: true,
-                  maxBufferLength: dynamicMaxBufferLength,
-                  maxMaxBufferLength: dynamicMaxMaxBufferLength,
-                  maxBufferSize: dynamicMaxBufferSize,
-                });
-
-                hlsRef.current = hls;
-                hls.loadSource(url);
+                // Attach the already-running HLS instance to the video element
                 hls.attachMedia(video);
                 artInstance.hls = hls;
 
@@ -241,14 +231,11 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
            canvas.style.position = 'absolute';
            canvas.style.bottom = `${subBottom}%`; 
            canvas.style.left = '50%';  
-           
            canvas.style.transform = `translateX(-50%) scale(${subSize}) translateZ(0)`; 
            canvas.style.transformOrigin = 'bottom center';
-           
            canvas.style.maxWidth = '85%'; 
            canvas.style.maxHeight = '20%'; 
            canvas.style.objectFit = 'contain'; 
-           
            canvas.style.pointerEvents = 'none';
            canvas.style.zIndex = '20'; 
            canvas.style.willChange = 'contents, transform';
@@ -259,13 +246,10 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
            // @ts-ignore
            const offscreen = canvas.transferControlToOffscreen();
            
-           const worker = new Worker('/pgs-worker.js');
-           pgsWorkerRef.current = worker;
-
-           worker.postMessage({
+           // Initialize the worker with the canvas (URL was already sent in PRECACHE)
+           pgsWorkerRef.current!.postMessage({
                type: 'INIT',
-               canvas: offscreen,
-               url: null 
+               canvas: offscreen
            }, [offscreen]);
 
            const startSyncEngine = () => {
@@ -297,15 +281,11 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
     return () => {
       isMounted = false;
       if (syncLoopRef.current) cancelAnimationFrame(syncLoopRef.current);
-      if (pgsWorkerRef.current) {
-          pgsWorkerRef.current.postMessage({ type: 'CLEAR' });
-          pgsWorkerRef.current.terminate();
-      }
+      if (pgsWorkerRef.current) { pgsWorkerRef.current.postMessage({ type: 'CLEAR' }); pgsWorkerRef.current.terminate(); }
       if (hlsRef.current) hlsRef.current.destroy();
       if (artRef.current) artRef.current.destroy(true);
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [streamInfo]); 
+  }, [streamInfo]);
 
   const switchAudio = (trackId: number) => {
     if (hlsRef.current) {
@@ -318,50 +298,50 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
     if (!artRef.current) return;
 
     if (track.type === 'vtt') {
-       activeSubTypeRef.current = 'vtt';
-       if (hlsRef.current && track.hlsId !== undefined) hlsRef.current.subtitleTrack = track.hlsId;
-       if (pgsWorkerRef.current) pgsWorkerRef.current.postMessage({ type: 'CLEAR' });
-    } 
+      activeSubTypeRef.current = 'vtt';
+      if (hlsRef.current && track.hlsId !== undefined) hlsRef.current.subtitleTrack = track.hlsId;
+      if (pgsWorkerRef.current) pgsWorkerRef.current.postMessage({ type: 'CLEAR' });
+    }
     else if (track.type === 'pgs') {
-       activeSubTypeRef.current = 'pgs';
-       if (hlsRef.current) hlsRef.current.subtitleTrack = -1; 
-       if (pgsWorkerRef.current) pgsWorkerRef.current.postMessage({ type: 'LOAD', url: track.url });
+      activeSubTypeRef.current = 'pgs';
+      if (hlsRef.current) hlsRef.current.subtitleTrack = -1;
+      if (pgsWorkerRef.current) pgsWorkerRef.current.postMessage({ type: 'LOAD', url: track.url });
     }
     else {
-       activeSubTypeRef.current = 'none';
-       if (hlsRef.current) hlsRef.current.subtitleTrack = -1;
-       if (pgsWorkerRef.current) pgsWorkerRef.current.postMessage({ type: 'CLEAR' });
+      activeSubTypeRef.current = 'none';
+      if (hlsRef.current) hlsRef.current.subtitleTrack = -1;
+      if (pgsWorkerRef.current) pgsWorkerRef.current.postMessage({ type: 'CLEAR' });
     }
-    
+
     setActiveSub(track.id);
   };
 
   return (
     <>
       <div className="w-full aspect-video bg-neutral-950 relative border-b border-neutral-900 mt-0">
-        
+
         {isSettingsOpen && (
           <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-black/80 backdrop-blur-md border border-neutral-800 p-6 rounded-2xl z-[9999] flex flex-col gap-5 min-w-[320px] shadow-2xl transition-opacity">
             <div className="flex justify-between items-center mb-1">
               <h3 className="text-white font-bold tracking-widest uppercase text-sm">Image Subtitle Tweaks</h3>
-              <button 
-                onClick={() => setIsSettingsOpen(false)} 
+              <button
+                onClick={() => setIsSettingsOpen(false)}
                 className="text-neutral-400 hover:text-white transition-colors"
               >
                 ✕
               </button>
             </div>
-            
+
             <div className="flex flex-col gap-3">
               <label className="text-xs text-neutral-400 flex justify-between font-semibold uppercase tracking-wider">
                 <span>Scale Size</span>
                 <span className="text-white">{Math.round(subSize * 100)}%</span>
               </label>
-              <input 
-                type="range" 
-                min="0.2" max="2.0" step="0.05" 
-                value={subSize} 
-                onChange={(e) => setSubSize(parseFloat(e.target.value))} 
+              <input
+                type="range"
+                min="0.2" max="2.0" step="0.05"
+                value={subSize}
+                onChange={(e) => setSubSize(parseFloat(e.target.value))}
                 className="w-full accent-blue-500 cursor-pointer"
               />
             </div>
@@ -371,11 +351,11 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
                 <span>Vertical Height</span>
                 <span className="text-white">{subBottom}%</span>
               </label>
-              <input 
-                type="range" 
-                min="0" max="60" step="1" 
-                value={subBottom} 
-                onChange={(e) => setSubBottom(parseFloat(e.target.value))} 
+              <input
+                type="range"
+                min="0" max="60" step="1"
+                value={subBottom}
+                onChange={(e) => setSubBottom(parseFloat(e.target.value))}
                 className="w-full accent-blue-500 cursor-pointer"
               />
             </div>
@@ -402,7 +382,7 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
 
       {!isLoading && !errorMsg && (
         <div className="w-full max-w-screen-2xl mx-auto p-4 md:p-8 flex flex-col md:flex-row justify-between gap-8">
-          
+
           <div className="flex flex-col gap-3">
             <span className="text-xs text-neutral-600 uppercase tracking-widest font-semibold">
               Audio Override
@@ -436,7 +416,7 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
                 Press J for Settings
               </span>
             </div>
-            
+
             <div className="flex flex-wrap gap-2 bg-neutral-950 p-2 rounded-2xl border border-neutral-900 w-fit justify-end">
               {subTracks.length > 0 ? (
                 subTracks.map((sub) => (
