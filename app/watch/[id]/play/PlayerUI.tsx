@@ -4,6 +4,9 @@ import { useEffect, useRef, useState } from 'react';
 
 const CORS_PROXY_BASE = "https://xkca.dadalapathy756.workers.dev/?url=";
 
+const LOCAL_STORAGE_VTT_KEY = 'movie_player_vtt_config';
+const LOCAL_STORAGE_PGS_KEY = 'movie_player_pgs_config';
+
 // Eagerly initialized out of scope to begin fetching before component mount (Fast TTFF)
 const playerLibsPromise = typeof window !== 'undefined'
   ? Promise.all([
@@ -59,26 +62,51 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
 
   const [subTracks, setSubTracks] = useState<SubTrack[]>([]);
   const [activeSub, setActiveSub] = useState<string>('off');
+  const [activeSubType, setActiveSubType] = useState<'vtt' | 'pgs' | 'none'>('none');
 
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [subSize, setSubSize] = useState<number>(0.80);
-  const [subBottom, setSubBottom] = useState<number>(7);
+  // Subtitle Configuration State
+  const [isSettingsMenuOpen, setIsSettingsMenuOpen] = useState(false);
+  const [vttConfig, setVttConfig] = useState({ size: 1.0, bottom: 5 });
+  const [pgsConfig, setPgsConfig] = useState({ size: 0.8, bottom: 7 });
+  const [isClientMounted, setIsClientMounted] = useState(false);
 
+  const toggleSettingsMenuRef = useRef(() => setIsSettingsMenuOpen(prev => !prev));
+  toggleSettingsMenuRef.current = () => setIsSettingsMenuOpen(prev => !prev);
+
+  // Hydrate states from localStorage safely on client mount
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.target as HTMLElement).tagName === 'INPUT' || (e.target as HTMLElement).tagName === 'TEXTAREA') return;
-      if (e.key === 'j' || e.key === 'J') setIsSettingsOpen(prev => !prev);
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+    try {
+      const savedVtt = localStorage.getItem(LOCAL_STORAGE_VTT_KEY);
+      if (savedVtt) setVttConfig(JSON.parse(savedVtt));
+
+      const savedPgs = localStorage.getItem(LOCAL_STORAGE_PGS_KEY);
+      if (savedPgs) setPgsConfig(JSON.parse(savedPgs));
+    } catch (e) {
+      console.warn("Could not parse saved subtitle configurations.");
+    }
+    setIsClientMounted(true);
   }, []);
+
+  // Sync VTT configs to localStorage
+  useEffect(() => {
+    if (isClientMounted) {
+      localStorage.setItem(LOCAL_STORAGE_VTT_KEY, JSON.stringify(vttConfig));
+    }
+  }, [vttConfig, isClientMounted]);
+
+  // Sync PGS configs to localStorage
+  useEffect(() => {
+    if (isClientMounted) {
+      localStorage.setItem(LOCAL_STORAGE_PGS_KEY, JSON.stringify(pgsConfig));
+    }
+  }, [pgsConfig, isClientMounted]);
 
   useEffect(() => {
     if (pgsCanvasRef.current) {
-      pgsCanvasRef.current.style.bottom = `${subBottom}%`;
-      pgsCanvasRef.current.style.transform = `translateX(-50%) scale(${subSize}) translateZ(0)`;
+      pgsCanvasRef.current.style.bottom = `${pgsConfig.bottom}%`;
+      pgsCanvasRef.current.style.transform = `translateX(-50%) scale(${pgsConfig.size}) translateZ(0)`;
     }
-  }, [subSize, subBottom]);
+  }, [pgsConfig.size, pgsConfig.bottom]);
 
   useEffect(() => {
     let isMounted = true;
@@ -137,9 +165,9 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
           maxBufferLength: dynamicMaxBufferLength,
           maxMaxBufferLength: dynamicMaxMaxBufferLength,
           maxBufferSize: dynamicMaxBufferSize,
-          renderTextTracksNatively: true, // ADD THIS
+          renderTextTracksNatively: true, 
           // @ts-ignore
-          subtitleDisplay: false as any   // ADD THIS
+          subtitleDisplay: false as any   
         });
 
         hlsRef.current = hls;
@@ -154,7 +182,6 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
               let rawName = track.name || track.lang || track.language || `Audio Track ${index + 1}`;
               if (rawName.startsWith('U_')) rawName = rawName.replace('U_', '');
               else if (rawName.startsWith('P_')) rawName = rawName.replace('P_', '');
-              else if (rawName.startsWith('M_')) rawName = '[C] ' + rawName.replace('M_', '');
               return { id: index, name: rawName };
             });
             setAudioTracks(tracks);
@@ -179,15 +206,17 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
               return [{ id: 'off', name: 'Off', type: 'off' }, ...vttTracks, ...existingPgs];
             });
 
-            // Automatically visually sync the UI if HLS auto-picked a subtitle internally on boot
             if (hls.subtitleTrack !== -1) {
               setActiveSub(`vtt_${hls.subtitleTrack}`);
               activeSubTypeRef.current = 'vtt';
+              setActiveSubType('vtt');
             }
           }
         });
 
         hls.loadSource(manifestUrl);
+
+        const subtitleSvg = `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path><line x1="9" y1="10" x2="15" y2="10"></line><line x1="9" y1="14" x2="15" y2="14"></line></svg>`;
 
         const artOptions: any = {
           container: playerContainerRef.current,
@@ -197,7 +226,18 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
           autoplay: true,
           setting: false,
           fullscreen: true,
-          subtitle: { url: '', type: 'srt' }, // ADD THIS: Forces DOM container creation
+          subtitle: { url: '', type: 'srt' }, 
+          controls: [
+            {
+              position: 'right',
+              html: `<div class="art-control-subtitle" style="display: flex; align-items: center; justify-content: center; padding: 0 10px; cursor: pointer; height: 100%; transition: color 0.2s;" onmouseover="this.style.color='#fff'" onmouseout="this.style.color='inherit'">${subtitleSvg}</div>`,
+              index: 10,
+              tooltip: 'Subtitle Context Menu',
+              click: function () {
+                toggleSettingsMenuRef.current();
+              },
+            }
+          ],
           plugins: [
             ...(thumbsUrl && VttThumbnailPlugin ? [VttThumbnailPlugin({
               vtt: thumbsUrl,
@@ -206,7 +246,6 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
                 borderRadius: '4px',
                 boxShadow: '0 2px 5px rgba(0, 0, 0)',
                 scale: '1.2',
-                // You can also adjust the transform or margin if you want it to float higher
                 marginBottom: '25px'
               }
             })] : [])
@@ -227,7 +266,6 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
         artRef.current = new Artplayer(artOptions);
 
         artRef.current.on('ready', () => {
-          // Prevent ghost canvas leaks between re-renders
           if (pgsCanvasRef.current) {
             pgsCanvasRef.current.remove();
           }
@@ -236,11 +274,12 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
           pgsCanvasRef.current = canvas;
 
           canvas.style.position = 'absolute';
-          canvas.style.bottom = `${subBottom}%`;
+          // Use current config state refs since it may have hydrated before Artplayer initialized
+          canvas.style.bottom = `${pgsConfig.bottom}%`;
           canvas.style.left = '50%';
-          canvas.style.transform = `translateX(-50%) scale(${subSize}) translateZ(0)`;
+          canvas.style.transform = `translateX(-50%) scale(${pgsConfig.size}) translateZ(0)`;
           canvas.style.transformOrigin = 'bottom center';
-          canvas.style.maxWidth = '85%';
+          canvas.style.maxWidth = '100%';
           canvas.style.maxHeight = '20%';
           canvas.style.objectFit = 'contain';
           canvas.style.pointerEvents = 'none';
@@ -255,7 +294,6 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
           pgsWorkerRef.current!.postMessage({ type: 'INIT', canvas: offscreen }, [offscreen]);
 
 
-          // --- NEW VTT DOM ENGINE OVERRIDE ---
           const video = artRef.current.video;
           const subtitleDom = artRef.current.template.$subtitle;
           const activeTrackListeners = new Map();
@@ -282,7 +320,6 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
 
             const bindTrack = (track: TextTrack) => {
               if (track.kind === 'subtitles' || track.kind === 'captions') {
-                // Force 'hidden' to suppress native styling, but keep cue events firing
                 track.mode = 'hidden';
                 if (!activeTrackListeners.has(track)) {
                   track.addEventListener('cuechange', renderCues);
@@ -296,7 +333,6 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
               if (e.track) bindTrack(e.track);
             });
 
-            // Ensure native tracks never accidentally show visually
             video.textTracks.addEventListener('change', () => {
               (Array.from(video.textTracks) as TextTrack[]).forEach((track: TextTrack) => {
                 if (track.mode === 'showing') track.mode = 'hidden';
@@ -333,7 +369,6 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
       isMounted = false;
       if (syncLoopRef.current) cancelAnimationFrame(syncLoopRef.current);
 
-      // CRITICAL FIX: Eradicates memory leaks during Next.js Unmount lifecycle
       if (pgsWorkerRef.current) {
         pgsWorkerRef.current.postMessage({ type: 'CLEAR' });
         pgsWorkerRef.current.terminate();
@@ -366,18 +401,21 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
     const subtitleDom = artRef.current.template.$subtitle;
     if (track.type === 'vtt') {
       activeSubTypeRef.current = 'vtt';
+      setActiveSubType('vtt');
       if (hlsRef.current && track.hlsId !== undefined) hlsRef.current.subtitleTrack = track.hlsId;
       if (pgsWorkerRef.current) pgsWorkerRef.current.postMessage({ type: 'CLEAR' });
     } else if (track.type === 'pgs') {
       activeSubTypeRef.current = 'pgs';
+      setActiveSubType('pgs');
       if (hlsRef.current) hlsRef.current.subtitleTrack = -1;
 
       if (pgsWorkerRef.current) {
         pgsWorkerRef.current.postMessage({ type: 'LOAD', url: track.url });
-        lastSentTimeRef.current = -1; // CRITICAL FIX: Instantly forces canvas to redraw, even if paused
+        lastSentTimeRef.current = -1; 
       }
     } else {
       activeSubTypeRef.current = 'none';
+      setActiveSubType('none');
       if (hlsRef.current) hlsRef.current.subtitleTrack = -1;
       if (pgsWorkerRef.current) pgsWorkerRef.current.postMessage({ type: 'CLEAR' });
       if (subtitleDom) subtitleDom.innerHTML = '';
@@ -388,30 +426,63 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
   return (
     <>
       <div
-        className="w-full aspect-video bg-neutral-950 relative border-b border-neutral-900 mt-0"
+        className="w-full aspect-video bg-neutral-950 relative border-b border-neutral-900 mt-0 group overflow-hidden"
         style={{
-          '--vtt-size': subSize,
-          '--vtt-bottom': subBottom
+          '--vtt-size': vttConfig.size,
+          '--vtt-bottom': vttConfig.bottom
         } as React.CSSProperties}
       >
-        {isSettingsOpen && (
-          <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-black/80 backdrop-blur-md border border-neutral-800 p-6 rounded-2xl z-[9999] flex flex-col gap-5 min-w-[320px] shadow-2xl transition-opacity">
+        {isSettingsMenuOpen && (
+          <div className="absolute bottom-16 right-4 bg-black/80 backdrop-blur-md border border-neutral-800 p-6 rounded-2xl z-[9999] flex flex-col gap-5 min-w-[320px] shadow-2xl transition-opacity animate-in fade-in slide-in-from-bottom-2 duration-200">
             <div className="flex justify-between items-center mb-1">
-              <h3 className="text-white font-bold tracking-widest uppercase text-sm">Image Subtitle Tweaks</h3>
-              <button onClick={() => setIsSettingsOpen(false)} className="text-neutral-400 hover:text-white transition-colors">✕</button>
+              <h3 className="text-white font-bold tracking-widest uppercase text-sm">
+                {activeSubType === 'vtt' ? 'Text Subtitle Settings' : activeSubType === 'pgs' ? 'Image Subtitle Settings' : 'Subtitle Settings'}
+              </h3>
+              <button onClick={() => setIsSettingsMenuOpen(false)} className="text-neutral-400 hover:text-white transition-colors">✕</button>
             </div>
-            <div className="flex flex-col gap-3">
-              <label className="text-xs text-neutral-400 flex justify-between font-semibold uppercase tracking-wider">
-                <span>Scale Size</span><span className="text-white">{Math.round(subSize * 100)}%</span>
-              </label>
-              <input type="range" min="0.2" max="2.0" step="0.05" value={subSize} onChange={(e) => setSubSize(parseFloat(e.target.value))} className="w-full accent-blue-500 cursor-pointer" />
-            </div>
-            <div className="flex flex-col gap-3">
-              <label className="text-xs text-neutral-400 flex justify-between font-semibold uppercase tracking-wider">
-                <span>Vertical Height</span><span className="text-white">{subBottom}%</span>
-              </label>
-              <input type="range" min="0" max="100" step="1" value={subBottom} onChange={(e) => setSubBottom(parseFloat(e.target.value))} className="w-full accent-blue-500 cursor-pointer" />
-            </div>
+            
+            {activeSubType === 'none' ? (
+              <div className="text-xs text-neutral-400 py-4 text-center font-medium">Select a subtitle track to adjust settings.</div>
+            ) : (
+              <>
+                <div className="flex flex-col gap-3">
+                  <label className="text-xs text-neutral-400 flex justify-between font-semibold uppercase tracking-wider">
+                    <span>Scale Size</span>
+                    <span className="text-white">
+                      {Math.round((activeSubType === 'vtt' ? vttConfig.size : pgsConfig.size) * 100)}%
+                    </span>
+                  </label>
+                  <input 
+                    type="range" min="0.2" max="2.0" step="0.05" 
+                    value={activeSubType === 'vtt' ? vttConfig.size : pgsConfig.size} 
+                    onChange={(e) => {
+                      const val = parseFloat(e.target.value);
+                      if (activeSubType === 'vtt') setVttConfig(p => ({...p, size: val}));
+                      else setPgsConfig(p => ({...p, size: val}));
+                    }} 
+                    className="w-full accent-blue-500 cursor-pointer" 
+                  />
+                </div>
+                <div className="flex flex-col gap-3">
+                  <label className="text-xs text-neutral-400 flex justify-between font-semibold uppercase tracking-wider">
+                    <span>Vertical Height</span>
+                    <span className="text-white">
+                      {activeSubType === 'vtt' ? vttConfig.bottom : pgsConfig.bottom}%
+                    </span>
+                  </label>
+                  <input 
+                    type="range" min="0" max="100" step="1" 
+                    value={activeSubType === 'vtt' ? vttConfig.bottom : pgsConfig.bottom} 
+                    onChange={(e) => {
+                      const val = parseFloat(e.target.value);
+                      if (activeSubType === 'vtt') setVttConfig(p => ({...p, bottom: val}));
+                      else setPgsConfig(p => ({...p, bottom: val}));
+                    }} 
+                    className="w-full accent-blue-500 cursor-pointer" 
+                  />
+                </div>
+              </>
+            )}
           </div>
         )}
 
@@ -450,7 +521,6 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
           <div className="flex flex-col gap-3 md:items-end">
             <div className="flex items-center gap-3">
               <span className="text-xs text-neutral-600 uppercase tracking-widest font-semibold">Subtitle Override</span>
-              {/* <span className="text-[10px] text-neutral-700 uppercase tracking-widest border border-neutral-800 px-2 py-0.5 rounded-full">Press J for Settings</span> */}
             </div>
             <div className="flex flex-wrap gap-2 bg-neutral-950 p-2 rounded-2xl border border-neutral-900 w-fit justify-end">
               {subTracks.length > 0 ? (

@@ -142,7 +142,7 @@ export default async function WatchPage(props: {
                           key={season.season_number}
                           prefetch={false}
                           href={`/watch/${id}?season=${season.season_number}`}
-                          className="px-6 py-3 rounded-lg border-2 border-neutral-800 hover:border-neutral-400 hover:text-white text-neutral-300 transition-colors font-mono text-sm tracking-widest bg-neutral-900/50 hover:bg-neutral-800 text-center"
+                          className="px-6 py-3 rounded-lg border-2 border-neutral-300/10 hover:border-neutral-100 duration-800 ease-out transition-colors text-neutral-300 font-mono text-sm tracking-widest bg-neutral-900/10 text-center"
                         >
                           Season {season.season_number}
                         </Link>
