@@ -82,38 +82,49 @@ export default async function WatchPage(props: {
                     <h3 className="text-neutral-500 font-mono text-xs uppercase tracking-widest">Select Source</h3>
                     <div className="flex flex-wrap gap-4">
                       {data.sources.map((src) => {
-                        // Determine resolution based on string matches
-                        const is2160p = src.quality?.includes('2160p') || src.variation_name?.includes('2160p');
+                        // 1. Determine base resolution
+                        const is2160p = src.quality?.includes('2160') || src.variation_name?.includes('2160');
                         const is1080p = src.quality?.includes('1080') || src.variation_name?.includes('1080');
+                        const resolution = is2160p ? '2160' : is1080p ? '1080' : null;
+
+                        // 2. Determine features
+                        const isImax = !!src.is_imax;
+                        const isHdr = !!src.is_hdr;
+
+                        // 3. Construct filename and calculate aspect-ratio preserving width for a fixed 20px height
+                        let imageSrc = null;
+                        let imgWidth = 0;
+                        const imgHeight = 20; // Consistent height for all pills
+
+                        if (resolution) {
+                          if (isImax) {
+                            imageSrc = `/${resolution}_IMAX_${isHdr ? 'HDR' : 'SDR'}.png`;
+                            imgWidth = 220; // 1100x100 downscaled to 20px height (11:1 ratio)
+                          } else {
+                            imageSrc = `/${resolution}_${isHdr ? 'HDR' : 'SDR'}.png`;
+                            imgWidth = 180; // 600x67 downscaled to 20px height (~9:1 ratio)
+                          }
+                        }
 
                         return (
                           <Link
                             key={src.id}
                             prefetch={false} // CRITICAL FIX: Eradicates DDOS network load spikes
                             href={`/watch/${id}/play?streamId=${src.id}`}
-                            className="px-3 py-2 rounded-md border-2 border-neutral-900/10 hover:border-neutral-200 transition-colors duration-50 bg-neutral-900/30 flex items-center gap-2"
+                            className="px-4 py-4 rounded-md border-2 border-neutral-300/10 hover:border-neutral-100 duration-800 ease-out transition-colors bg-neutral-900/10 flex items-center justify-center min-w-[200px]"
                           >
-                            {/* 1. Resolution Badge */}
-                            {is2160p ? (
-                              <Image src="/2160p.png" alt="2160p" width={75} height={25} className="object-contain" />
-                            ) : is1080p ? (
-                              <Image src="/1080.png" alt="1080p" width={75} height={25} className="object-contain" />
+                            {imageSrc ? (
+                              <Image
+                                src={imageSrc}
+                                alt={src.variation_name || src.quality}
+                                width={imgWidth}
+                                height={imgHeight}
+                                className="h-6 w-auto object-contain"
+                              />
                             ) : (
                               <span className="font-mono text-sm tracking-widest text-neutral-300">
                                 {src.variation_name || src.quality}
                               </span>
-                            )}
-
-                            {/* 2. IMAX Badge */}
-                            {!!src.is_imax && (
-                              <Image src="/imax.png" alt="IMAX" width={150} height={30} className="object-contain" />
-                            )}
-
-                            {/* 3. HDR / SDR Badge */}
-                            {!!src.is_hdr ? (
-                              <Image src="/hdr.png" alt="HDR" width={75} height={25} className="object-contain" />
-                            ) : (
-                              <Image src="/sdr.png" alt="SDR" width={75} height={25} className="object-contain" />
                             )}
                           </Link>
                         );

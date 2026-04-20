@@ -49,7 +49,7 @@ video::cue {
   line-height: 1 !important;
 
   /* 12-point directional shadow to create a flawless 2px stroke, plus a bottom drop shadow */
-  text-shadow: 2px 2px 2px rgba(0, 0, 0) !important;  
+  text-shadow: 1px 1px 4px rgba(0, 0, 0) !important;  
 }
 
 /* 2. Target the WebKit subtitle container to allow vertical shifting */
