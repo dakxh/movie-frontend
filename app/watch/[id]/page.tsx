@@ -24,9 +24,9 @@ export default async function WatchPage(props: {
 
   const isSeries = data.type === 'series'
   const showEpisodeView = isSeries && activeSeason && data.seasons
-  
+
   const activeSeasonData = showEpisodeView ? data.seasons?.find(s => s.season_number === Number(activeSeason)) : null
-  const activeEpisodes = activeSeasonData ? activeSeasonData.episodes :[]
+  const activeEpisodes = activeSeasonData ? activeSeasonData.episodes : []
 
   return (
     <main className="bg-black text-white">
@@ -71,31 +71,53 @@ export default async function WatchPage(props: {
                   <span>•</span>
                   <span className="text-yellow-400">★ {data.rating || 'N/A'}</span>
                 </div>
-                
+
                 {data.overview && (
                   <p className="text-sm text-neutral-400 mt-2 max-w-xl leading-relaxed">{data.overview}</p>
                 )}
+
 
                 {data.type === 'movie' && data.sources && (
                   <div className="mt-4 bg-black p-6 rounded-md shadow-2xl flex flex-col gap-4 border border-neutral-900">
                     <h3 className="text-neutral-500 font-mono text-xs uppercase tracking-widest">Select Source</h3>
                     <div className="flex flex-wrap gap-4">
-                      {data.sources.map((src) => (
-                        <Link
-                          key={src.id}
-                          prefetch={false} // CRITICAL FIX: Eradicates DDOS network load spikes
-                          href={`/watch/${id}/play?streamId=${src.id}`}
-                          className="px-6 py-3 rounded-lg border-2 border-neutral-800 hover:border-neutral-400 hover:text-white text-neutral-300 transition-colors font-mono text-sm tracking-widest bg-neutral-900/50 hover:bg-neutral-800 text-center flex flex-col gap-1 items-center"
-                        >
-                          <span>{src.variation_name || src.quality}</span>
-                          {(src.is_hdr || src.is_imax) ? (
-                            <div className="flex gap-2 text-[10px]">
-                              {src.is_hdr ? <span className="text-blue-400">HDR</span> : null}
-                              {src.is_imax ? <span className="text-purple-400">IMAX</span> : null}
-                            </div>
-                          ) : null}
-                        </Link>
-                      ))}
+                      {data.sources.map((src) => {
+                        // Determine resolution based on string matches
+                        const is2160p = src.quality?.includes('2160p') || src.variation_name?.includes('2160p');
+                        const is1080p = src.quality?.includes('1080') || src.variation_name?.includes('1080');
+
+                        return (
+                          <Link
+                            key={src.id}
+                            prefetch={false} // CRITICAL FIX: Eradicates DDOS network load spikes
+                            href={`/watch/${id}/play?streamId=${src.id}`}
+                            className="px-3 rounded-md border-2 border-neutral-900/10 hover:border-neutral-200 transition-colors duration-50 bg-neutral-900/30 flex items-center gap-2"
+                          >
+                            {/* 1. Resolution Badge */}
+                            {is2160p ? (
+                              <Image src="/2160p.png" alt="2160p" width={75} height={25} className="object-contain" />
+                            ) : is1080p ? (
+                              <Image src="/1080.png" alt="1080p" width={75} height={25} className="object-contain" />
+                            ) : (
+                              <span className="font-mono text-sm tracking-widest text-neutral-300">
+                                {src.variation_name || src.quality}
+                              </span>
+                            )}
+
+                            {/* 2. IMAX Badge */}
+                            {!!src.is_imax && (
+                              <Image src="/imax.png" alt="IMAX" width={150} height={100} className="object-contain pb-2" />
+                            )}
+
+                            {/* 3. HDR / SDR Badge */}
+                            {!!src.is_hdr ? (
+                              <Image src="/hdr.png" alt="HDR" width={75} height={25} className="object-contain" />
+                            ) : (
+                              <Image src="/sdr.png" alt="SDR" width={75} height={25} className="object-contain" />
+                            )}
+                          </Link>
+                        );
+                      })}
                     </div>
                   </div>
                 )}
