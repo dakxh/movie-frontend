@@ -7,10 +7,10 @@ const CORS_PROXY_BASE = "https://xkca.dadalapathy756.workers.dev/?url=";
 // Eagerly initialized out of scope to begin fetching before component mount (Fast TTFF)
 const playerLibsPromise = typeof window !== 'undefined'
   ? Promise.all([
-      import('artplayer').then(m => m.default), 
-      import('hls.js').then(m => m.default),
-      import('artplayer-plugin-vtt-thumbnail').then(m => m.default).catch(() => null)
-    ])
+    import('artplayer').then(m => m.default),
+    import('hls.js').then(m => m.default),
+    import('artplayer-plugin-vtt-thumbnail').then(m => m.default).catch(() => null)
+  ])
   : Promise.resolve([null, null, null]);
 
 function generateProperResolvedHfPath(u: string): string {
@@ -52,16 +52,16 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
   const lastSentTimeRef = useRef<number>(-1);
 
   const [isLoading, setIsLoading] = useState(true);
-  const[errorMsg, setErrorMsg] = useState<string | null>(null);
-  
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
   const [audioTracks, setAudioTracks] = useState<{ id: number; name: string }[]>([]);
   const [activeAudio, setActiveAudio] = useState<number>(0);
-  
+
   const [subTracks, setSubTracks] = useState<SubTrack[]>([]);
   const [activeSub, setActiveSub] = useState<string>('off');
 
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const[subSize, setSubSize] = useState<number>(0.85);
+  const [subSize, setSubSize] = useState<number>(0.85);
   const [subBottom, setSubBottom] = useState<number>(8);
 
   useEffect(() => {
@@ -71,14 +71,14 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  },[]);
+  }, []);
 
   useEffect(() => {
     if (pgsCanvasRef.current) {
       pgsCanvasRef.current.style.bottom = `${subBottom}%`;
       pgsCanvasRef.current.style.transform = `translateX(-50%) scale(${subSize}) translateZ(0)`;
     }
-  },[subSize, subBottom]);
+  }, [subSize, subBottom]);
 
   useEffect(() => {
     let isMounted = true;
@@ -88,7 +88,7 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
         const manifestUrl = streamInfo._safe_manifest_url;
         const thumbsUrl = streamInfo._safe_timeline_thumbnails_url;
 
-        const parsedPgs: SubTrack[] = (streamInfo.pgs_overlays ||[]).map((sub: any, idx: number) => ({
+        const parsedPgs: SubTrack[] = (streamInfo.pgs_overlays || []).map((sub: any, idx: number) => ({
           id: `pgs_${idx}`,
           name: (sub.label || `Overlay ${idx + 1}`) + ' (Image)',
           type: 'pgs',
@@ -100,10 +100,10 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
         }
 
         if (!pgsWorkerRef.current && typeof window !== 'undefined') {
-            pgsWorkerRef.current = new Worker('/pgs-worker.js');
+          pgsWorkerRef.current = new Worker('/pgs-worker.js');
         }
         if (parsedPgs.length > 0 && parsedPgs[0].url) {
-            pgsWorkerRef.current!.postMessage({ type: 'PRECACHE', url: parsedPgs[0].url });
+          pgsWorkerRef.current!.postMessage({ type: 'PRECACHE', url: parsedPgs[0].url });
         }
 
         const [Artplayer, Hls, VttThumbnailPlugin] = await playerLibsPromise;
@@ -112,23 +112,23 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
         const HfBucketsProxyLoader = createHfBucketsProxyLoader(Hls.DefaultConfig.loader, getSplitRoutedUrl);
 
         const nav = (typeof navigator !== 'undefined' ? navigator : {}) as any;
-        const deviceMemory = nav.deviceMemory || 4; 
+        const deviceMemory = nav.deviceMemory || 4;
         const connection = nav.connection || nav.mozConnection || nav.webkitConnection;
         const effectiveType = connection ? connection.effectiveType : '4g';
         const downlink = connection ? connection.downlink : 10;
-        
-        let dynamicMaxBufferSize = 100 * 1024 * 1024; 
+
+        let dynamicMaxBufferSize = 100 * 1024 * 1024;
         let dynamicMaxBufferLength = 120;
         let dynamicMaxMaxBufferLength = 180;
-        
+
         if (deviceMemory < 4 || effectiveType === '3g') {
-            dynamicMaxBufferSize = 30 * 1024 * 1024; 
-            dynamicMaxBufferLength = 30;
-            dynamicMaxMaxBufferLength = 60;
+          dynamicMaxBufferSize = 30 * 1024 * 1024;
+          dynamicMaxBufferLength = 30;
+          dynamicMaxMaxBufferLength = 60;
         } else if (deviceMemory >= 8 && downlink > 15) {
-            dynamicMaxBufferSize = 150 * 1024 * 1024; 
-            dynamicMaxBufferLength = 240;
-            dynamicMaxMaxBufferLength = 360;
+          dynamicMaxBufferSize = 150 * 1024 * 1024;
+          dynamicMaxBufferLength = 240;
+          dynamicMaxMaxBufferLength = 360;
         }
 
         const hls = new Hls({
@@ -137,8 +137,11 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
           maxBufferLength: dynamicMaxBufferLength,
           maxMaxBufferLength: dynamicMaxMaxBufferLength,
           maxBufferSize: dynamicMaxBufferSize,
+          renderTextTracksNatively: true, // ADD THIS
+          // @ts-ignore
+          subtitleDisplay: false as any   // ADD THIS
         });
-        
+
         hlsRef.current = hls;
 
         hls.on(Hls.Events.ERROR, (event, data) => {
@@ -151,7 +154,7 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
               let rawName = track.name || track.lang || track.language || `Audio Track ${index + 1}`;
               if (rawName.startsWith('U_')) rawName = rawName.replace('U_', '');
               else if (rawName.startsWith('P_')) rawName = rawName.replace('P_', '');
-              else if (rawName.startsWith('M_')) rawName = '[C] '+rawName.replace('M_', '');
+              else if (rawName.startsWith('M_')) rawName = '[C] ' + rawName.replace('M_', '');
               return { id: index, name: rawName };
             });
             setAudioTracks(tracks);
@@ -159,7 +162,7 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
         });
 
         hls.on(Hls.Events.AUDIO_TRACK_SWITCHED, (_, data) => {
-            setActiveAudio(data.id);
+          setActiveAudio(data.id);
         });
 
         hls.on(Hls.Events.SUBTITLE_TRACKS_UPDATED, (_, data) => {
@@ -170,10 +173,10 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
               name: (track.name || track.lang || track.language || `Subtitle Track ${index + 1}`) + ' (Text)',
               type: 'vtt'
             }));
-            
+
             setSubTracks(prev => {
               const existingPgs = prev.filter(p => p.type === 'pgs');
-              return[{ id: 'off', name: 'Off', type: 'off' }, ...vttTracks, ...existingPgs];
+              return [{ id: 'off', name: 'Off', type: 'off' }, ...vttTracks, ...existingPgs];
             });
 
             // Automatically visually sync the UI if HLS auto-picked a subtitle internally on boot
@@ -194,17 +197,19 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
           autoplay: true,
           setting: false,
           fullscreen: true,
+          subtitle: { url: '', type: 'srt' }, // ADD THIS: Forces DOM container creation
           plugins: [
-            ...(thumbsUrl && VttThumbnailPlugin ?[VttThumbnailPlugin({ vtt: thumbsUrl,
+            ...(thumbsUrl && VttThumbnailPlugin ? [VttThumbnailPlugin({
+              vtt: thumbsUrl,
               style: {
-                  border: '2px solid #ddcfcf',
-                  borderRadius: '4px',
-                  boxShadow: '0 2px 5px rgba(0, 0, 0)',
-                  scale: '1.2',
-                  // You can also adjust the transform or margin if you want it to float higher
-                  marginBottom: '25px' 
-                }
-             })] :[])
+                border: '2px solid #ddcfcf',
+                borderRadius: '4px',
+                boxShadow: '0 2px 5px rgba(0, 0, 0)',
+                scale: '1.2',
+                // You can also adjust the transform or margin if you want it to float higher
+                marginBottom: '25px'
+              }
+            })] : [])
           ],
           customType: {
             m3u8: function (video: HTMLVideoElement, url: string, artInstance: any) {
@@ -220,46 +225,96 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
         };
 
         artRef.current = new Artplayer(artOptions);
-        
+
         artRef.current.on('ready', () => {
-           // Prevent ghost canvas leaks between re-renders
-           if (pgsCanvasRef.current) {
-               pgsCanvasRef.current.remove();
-           }
+          // Prevent ghost canvas leaks between re-renders
+          if (pgsCanvasRef.current) {
+            pgsCanvasRef.current.remove();
+          }
 
-           const canvas = document.createElement('canvas');
-           pgsCanvasRef.current = canvas; 
+          const canvas = document.createElement('canvas');
+          pgsCanvasRef.current = canvas;
 
-           canvas.style.position = 'absolute';
-           canvas.style.bottom = `${subBottom}%`; 
-           canvas.style.left = '50%';  
-           canvas.style.transform = `translateX(-50%) scale(${subSize}) translateZ(0)`; 
-           canvas.style.transformOrigin = 'bottom center';
-           canvas.style.maxWidth = '85%'; 
-           canvas.style.maxHeight = '20%'; 
-           canvas.style.objectFit = 'contain'; 
-           canvas.style.pointerEvents = 'none';
-           canvas.style.zIndex = '20'; 
-           canvas.style.willChange = 'contents, transform';
-           canvas.style.backfaceVisibility = 'hidden';
-           
-           artRef.current.template.$player.appendChild(canvas);
+          canvas.style.position = 'absolute';
+          canvas.style.bottom = `${subBottom}%`;
+          canvas.style.left = '50%';
+          canvas.style.transform = `translateX(-50%) scale(${subSize}) translateZ(0)`;
+          canvas.style.transformOrigin = 'bottom center';
+          canvas.style.maxWidth = '85%';
+          canvas.style.maxHeight = '20%';
+          canvas.style.objectFit = 'contain';
+          canvas.style.pointerEvents = 'none';
+          canvas.style.zIndex = '20';
+          canvas.style.willChange = 'contents, transform';
+          canvas.style.backfaceVisibility = 'hidden';
 
-           // @ts-ignore
-           const offscreen = canvas.transferControlToOffscreen();
-           pgsWorkerRef.current!.postMessage({ type: 'INIT', canvas: offscreen }, [offscreen]);
+          artRef.current.template.$player.appendChild(canvas);
 
-           const startSyncEngine = () => {
-               if (activeSubTypeRef.current === 'pgs' && pgsWorkerRef.current && artRef.current) {
-                   const rawTime = artRef.current.video ? artRef.current.video.currentTime : artRef.current.currentTime;
-                   if (rawTime !== lastSentTimeRef.current) {
-                       pgsWorkerRef.current.postMessage({ type: 'TIME', time: rawTime || 0 });
-                       lastSentTimeRef.current = rawTime;
-                   }
-               }
-               syncLoopRef.current = requestAnimationFrame(startSyncEngine);
-           };
-           syncLoopRef.current = requestAnimationFrame(startSyncEngine);
+          // @ts-ignore
+          const offscreen = canvas.transferControlToOffscreen();
+          pgsWorkerRef.current!.postMessage({ type: 'INIT', canvas: offscreen }, [offscreen]);
+
+
+          // --- NEW VTT DOM ENGINE OVERRIDE ---
+          const video = artRef.current.video;
+          const subtitleDom = artRef.current.template.$subtitle;
+          const activeTrackListeners = new Map();
+
+          if (subtitleDom) {
+            const renderCues = (event: Event) => {
+              const track = event.target as TextTrack;
+              if (!['hidden', 'showing'].includes(track.mode)) return;
+
+              const cues = track.activeCues;
+              if (!cues || cues.length === 0) {
+                subtitleDom.innerHTML = '';
+                subtitleDom.style.display = 'none';
+                return;
+              }
+
+              const activeText = Array.from(cues)
+                .map((c: any) => c.text.replace(/\n/g, '<br>'))
+                .join('<br>');
+
+              subtitleDom.innerHTML = activeText;
+              subtitleDom.style.display = 'block';
+            };
+
+            const bindTrack = (track: TextTrack) => {
+              if (track.kind === 'subtitles' || track.kind === 'captions') {
+                // Force 'hidden' to suppress native styling, but keep cue events firing
+                track.mode = 'hidden';
+                if (!activeTrackListeners.has(track)) {
+                  track.addEventListener('cuechange', renderCues);
+                  activeTrackListeners.set(track, renderCues);
+                }
+              }
+            };
+
+            (Array.from(video.textTracks) as TextTrack[]).forEach(bindTrack);
+            video.textTracks.addEventListener('addtrack', (e: TrackEvent) => {
+              if (e.track) bindTrack(e.track);
+            });
+
+            // Ensure native tracks never accidentally show visually
+            video.textTracks.addEventListener('change', () => {
+              (Array.from(video.textTracks) as TextTrack[]).forEach((track: TextTrack) => {
+                if (track.mode === 'showing') track.mode = 'hidden';
+              });
+            });
+          }
+
+          const startSyncEngine = () => {
+            if (activeSubTypeRef.current === 'pgs' && pgsWorkerRef.current && artRef.current) {
+              const rawTime = artRef.current.video ? artRef.current.video.currentTime : artRef.current.currentTime;
+              if (rawTime !== lastSentTimeRef.current) {
+                pgsWorkerRef.current.postMessage({ type: 'TIME', time: rawTime || 0 });
+                lastSentTimeRef.current = rawTime;
+              }
+            }
+            syncLoopRef.current = requestAnimationFrame(startSyncEngine);
+          };
+          syncLoopRef.current = requestAnimationFrame(startSyncEngine);
         });
 
         setIsLoading(false);
@@ -279,9 +334,9 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
       if (syncLoopRef.current) cancelAnimationFrame(syncLoopRef.current);
 
       // CRITICAL FIX: Eradicates memory leaks during Next.js Unmount lifecycle
-      if (pgsWorkerRef.current) { 
-        pgsWorkerRef.current.postMessage({ type: 'CLEAR' }); 
-        pgsWorkerRef.current.terminate(); 
+      if (pgsWorkerRef.current) {
+        pgsWorkerRef.current.postMessage({ type: 'CLEAR' });
+        pgsWorkerRef.current.terminate();
         pgsWorkerRef.current = null;
       }
       if (hlsRef.current) {
@@ -293,11 +348,11 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
         artRef.current = null;
       }
       if (pgsCanvasRef.current) {
-         pgsCanvasRef.current.remove();
-         pgsCanvasRef.current = null;
+        pgsCanvasRef.current.remove();
+        pgsCanvasRef.current = null;
       }
     };
-  },[streamInfo]);
+  }, [streamInfo]);
 
   const switchAudio = (trackId: number) => {
     if (hlsRef.current) {
@@ -316,7 +371,7 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
     } else if (track.type === 'pgs') {
       activeSubTypeRef.current = 'pgs';
       if (hlsRef.current) hlsRef.current.subtitleTrack = -1;
-      
+
       if (pgsWorkerRef.current) {
         pgsWorkerRef.current.postMessage({ type: 'LOAD', url: track.url });
         lastSentTimeRef.current = -1; // CRITICAL FIX: Instantly forces canvas to redraw, even if paused
@@ -332,7 +387,7 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
 
   return (
     <>
-      <div 
+      <div
         className="w-full aspect-video bg-neutral-950 relative border-b border-neutral-900 mt-0"
         style={{
           '--vtt-size': subSize,

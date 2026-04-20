@@ -39,21 +39,39 @@
 /* --- VLC-Style Native VTT Subtitle Overrides --- */
 
 /* 1. Target the text cue itself */
+/* --- HIDE NATIVE TEXT TRACKS --- */
+video::-webkit-media-text-track-display,
+video::-webkit-media-text-track-container {
+    display: none !important;
+}
+
 video::cue {
-  background: transparent !important;
-  color: #ffffff !important;
-  font-family: Arial;
-  font-weight: 500 !important;
-  /* Base size scales up/down via the React state variable */
-  font-size: calc(var(--vtt-size, 0.8) * 6vmin) !important;
-  line-height: 1 !important;
-
-  /* 12-point directional shadow to create a flawless 2px stroke, plus a bottom drop shadow */
-  text-shadow: 1px 1px 4px rgba(0, 0, 0) !important;  
+    color: transparent !important;
+    background: transparent !important;
 }
 
-/* 2. Target the WebKit subtitle container to allow vertical shifting */
-video::-webkit-media-text-track-display {
-  /* Shifts the entire subtitle container upwards based on the slider percentage */
-  transform: translateY(calc(var(--vtt-bottom, 16) * -10%)) !important;
+.art-subtitle {
+    background-color: rgba(0, 0, 0, 0.65) !important;
+   
+    padding: 10px 16px !important;
+    border-radius: 6px !important;
+    width: fit-content !important;
+    max-width: 85% !important;
+    
+    left: 50% !important;
+    
+    /* Dynamically hook into PlayerUI's existing CSS Variables */
+    transform: translateX(-50%) scale(var(--vtt-size, 1)) !important;
+    bottom: calc(var(--vtt-bottom, 8) * 3%) !important;
+    transform-origin: bottom center;
+    
+    color: #ffffff !important;
+    font-size: clamp(1rem, 2.5vw, 1.5rem) !important; 
+    font-weight: 500 !important;
+    line-height: 1.2 !important;
+    font-family: system-ui, -apple-system, sans-serif !important;
+    text-align: center;
 }
+
+.art-subtitle b { color: #ffd700; font-weight: 700; }
+.art-subtitle i { font-style: italic; opacity: 0.9; }
