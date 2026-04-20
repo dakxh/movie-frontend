@@ -11,7 +11,7 @@
     color: var(--color-neutral-200);
     -webkit-font-smoothing: antialiased;
   }
-  
+
   ::selection {
     background-color: var(--color-neutral-700);
     color: var(--color-white);
@@ -22,13 +22,38 @@
 ::-webkit-scrollbar {
   width: 8px;
 }
+
 ::-webkit-scrollbar-track {
-  background: var(--color-neutral-950); 
+  background: var(--color-neutral-950);
 }
+
 ::-webkit-scrollbar-thumb {
-  background: var(--color-neutral-800); 
+  background: var(--color-neutral-800);
   border-radius: 4px;
 }
+
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--color-neutral-700); 
+  background: var(--color-neutral-700);
+}
+
+/* --- VLC-Style Native VTT Subtitle Overrides --- */
+
+/* 1. Target the text cue itself */
+video::cue {
+  background: transparent !important;
+  color: #ffffff !important;
+  font-family: Arial;
+  font-weight: 500 !important;
+  /* Base size scales up/down via the React state variable */
+  font-size: calc(var(--vtt-size, 0.8) * 6vmin) !important;
+  line-height: 1 !important;
+
+  /* 12-point directional shadow to create a flawless 2px stroke, plus a bottom drop shadow */
+  text-shadow: 2px 2px 2px rgba(0, 0, 0) !important;  
+}
+
+/* 2. Target the WebKit subtitle container to allow vertical shifting */
+video::-webkit-media-text-track-display {
+  /* Shifts the entire subtitle container upwards based on the slider percentage */
+  transform: translateY(calc(var(--vtt-bottom, 16) * -10%)) !important;
 }

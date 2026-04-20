@@ -195,7 +195,16 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
           setting: false,
           fullscreen: true,
           plugins: [
-            ...(thumbsUrl && VttThumbnailPlugin ?[VttThumbnailPlugin({ vtt: thumbsUrl })] :[])
+            ...(thumbsUrl && VttThumbnailPlugin ?[VttThumbnailPlugin({ vtt: thumbsUrl,
+              style: {
+                  border: '2px solid #ddcfcf',
+                  borderRadius: '4px',
+                  boxShadow: '0 2px 5px rgba(0, 0, 0)',
+                  scale: '1.2',
+                  // You can also adjust the transform or margin if you want it to float higher
+                  marginBottom: '25px' 
+                }
+             })] :[])
           ],
           customType: {
             m3u8: function (video: HTMLVideoElement, url: string, artInstance: any) {
@@ -323,7 +332,13 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
 
   return (
     <>
-      <div className="w-full aspect-video bg-neutral-950 relative border-b border-neutral-900 mt-0">
+      <div 
+        className="w-full aspect-video bg-neutral-950 relative border-b border-neutral-900 mt-0"
+        style={{
+          '--vtt-size': subSize,
+          '--vtt-bottom': subBottom
+        } as React.CSSProperties}
+      >
         {isSettingsOpen && (
           <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-black/80 backdrop-blur-md border border-neutral-800 p-6 rounded-2xl z-[9999] flex flex-col gap-5 min-w-[320px] shadow-2xl transition-opacity">
             <div className="flex justify-between items-center mb-1">
@@ -340,7 +355,7 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
               <label className="text-xs text-neutral-400 flex justify-between font-semibold uppercase tracking-wider">
                 <span>Vertical Height</span><span className="text-white">{subBottom}%</span>
               </label>
-              <input type="range" min="0" max="60" step="1" value={subBottom} onChange={(e) => setSubBottom(parseFloat(e.target.value))} className="w-full accent-blue-500 cursor-pointer" />
+              <input type="range" min="0" max="100" step="1" value={subBottom} onChange={(e) => setSubBottom(parseFloat(e.target.value))} className="w-full accent-blue-500 cursor-pointer" />
             </div>
           </div>
         )}
