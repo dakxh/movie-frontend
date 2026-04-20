@@ -50,33 +50,30 @@ video::cue {
     background: transparent !important;
 }
 
-.art-subtitle {
-    /* background-color: rgba(0, 0, 0, 0.65) !important; */
-   
-    padding: 10px 16px !important;
+.art-subtitle {  
+    padding: 14px 0px 14px 0px !important;
+    text-shadow: 2px 2px 4px rgba(0, 0, 0) !important;
     border-radius: 6px !important;
-    width: fit-content !important;
-    max-width: 100% !important;
-    text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.8) !important;
+    max-width: 100vw !important;
     left: 50% !important;
-    
-    /* Dynamically hook into PlayerUI's existing CSS Variables */
+
     transform: translateX(-50%) scale(var(--vtt-size, 1)) !important;
-    bottom: calc(var(--vtt-bottom, 8) * 1%) !important;
+    bottom: calc(var(--vtt-bottom, 7) * 1%) !important;
     transform-origin: bottom center;
     
-    color: #ffffff !important;
-    font-size: clamp(3rem, 2.5vw, 1.5rem) !important; 
+    color: #ececec !important;
+    font-size: clamp(2.5rem, 2.5vw, 2.5rem) !important;
     font-weight: 400 !important;
-    line-height: 1.2 !important;
-    font-family: system-ui, -apple-system, sans-serif !important;
+    line-height: 1.1 !important;
+    /* font-family: system-ui, -apple-system, sans-serif !important; */
+    font-family: monospace, 'Courier New', Courier, monospace !important;
     text-align: center;
 }
 
 .art-subtitle b { color: #ffd700; font-weight: 700; }
 .art-subtitle i { font-style: italic; opacity: 0.9; }
 
-/* --- HIDE WHEN EMPTY --- */
+
 .art-subtitle:empty {
     display: none !important;
     padding: 0 !important;
@@ -84,6 +81,6 @@ video::cue {
     background: transparent !important;
 }
 
-.art-video-player .art-subtitle {
+/* .art-video-player .art-subtitle {
   text-shadow: none !important;
-} 
+}  */

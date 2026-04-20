@@ -61,8 +61,8 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
   const [activeSub, setActiveSub] = useState<string>('off');
 
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [subSize, setSubSize] = useState<number>(0.85);
-  const [subBottom, setSubBottom] = useState<number>(8);
+  const [subSize, setSubSize] = useState<number>(0.80);
+  const [subBottom, setSubBottom] = useState<number>(7);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
