@@ -363,7 +363,7 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
 
   const switchSubtitle = (track: SubTrack) => {
     if (!artRef.current) return;
-
+    const subtitleDom = artRef.current.template.$subtitle;
     if (track.type === 'vtt') {
       activeSubTypeRef.current = 'vtt';
       if (hlsRef.current && track.hlsId !== undefined) hlsRef.current.subtitleTrack = track.hlsId;
@@ -380,8 +380,8 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
       activeSubTypeRef.current = 'none';
       if (hlsRef.current) hlsRef.current.subtitleTrack = -1;
       if (pgsWorkerRef.current) pgsWorkerRef.current.postMessage({ type: 'CLEAR' });
+      if (subtitleDom) subtitleDom.innerHTML = '';
     }
-
     setActiveSub(track.id);
   };
 
@@ -450,7 +450,7 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
           <div className="flex flex-col gap-3 md:items-end">
             <div className="flex items-center gap-3">
               <span className="text-xs text-neutral-600 uppercase tracking-widest font-semibold">Subtitle Override</span>
-              <span className="text-[10px] text-neutral-700 uppercase tracking-widest border border-neutral-800 px-2 py-0.5 rounded-full">Press J for Settings</span>
+              {/* <span className="text-[10px] text-neutral-700 uppercase tracking-widest border border-neutral-800 px-2 py-0.5 rounded-full">Press J for Settings</span> */}
             </div>
             <div className="flex flex-wrap gap-2 bg-neutral-950 p-2 rounded-2xl border border-neutral-900 w-fit justify-end">
               {subTracks.length > 0 ? (
