@@ -106,7 +106,7 @@ export default async function WatchPage(props: {
 
                             {/* 2. IMAX Badge */}
                             {!!src.is_imax && (
-                              <Image src="/imax.png" alt="IMAX" width={150} height={100} className="object-contain pb-2" />
+                              <Image src="/imax.png" alt="IMAX" width={150} height={30} className="object-contain" />
                             )}
 
                             {/* 3. HDR / SDR Badge */}
