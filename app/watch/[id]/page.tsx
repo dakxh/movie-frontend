@@ -91,7 +91,7 @@ export default async function WatchPage(props: {
                             key={src.id}
                             prefetch={false} // CRITICAL FIX: Eradicates DDOS network load spikes
                             href={`/watch/${id}/play?streamId=${src.id}`}
-                            className="px-3 rounded-md border-2 border-neutral-900/10 hover:border-neutral-200 transition-colors duration-50 bg-neutral-900/30 flex items-center gap-2"
+                            className="px-3 py-2 rounded-md border-2 border-neutral-900/10 hover:border-neutral-200 transition-colors duration-50 bg-neutral-900/30 flex items-center gap-2"
                           >
                             {/* 1. Resolution Badge */}
                             {is2160p ? (
