@@ -1,6 +1,7 @@
 import Link from 'next/link'
 import Image from 'next/image'
 import { getHomeCatalog } from '@/lib/catalog'
+import SearchOverlay from '@/components/SearchOverlay';
 
 export const revalidate = 3
 
@@ -42,6 +43,7 @@ export default async function CatalogGrid() {
           </Link>
         ))}
       </div>
+      <SearchOverlay />
     </main>
   )
 }
