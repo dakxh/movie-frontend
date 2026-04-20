@@ -165,9 +165,9 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
           maxBufferLength: dynamicMaxBufferLength,
           maxMaxBufferLength: dynamicMaxMaxBufferLength,
           maxBufferSize: dynamicMaxBufferSize,
-          renderTextTracksNatively: true, 
+          renderTextTracksNatively: true,
           // @ts-ignore
-          subtitleDisplay: false as any   
+          subtitleDisplay: false as any
         });
 
         hlsRef.current = hls;
@@ -216,17 +216,20 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
 
         hls.loadSource(manifestUrl);
 
-        const subtitleSvg = `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path><line x1="9" y1="10" x2="15" y2="10"></line><line x1="9" y1="14" x2="15" y2="14"></line></svg>`;
+        const subtitleSvg = `<svg width="25" height="25" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+        <path fill="none" stroke="currentColor"/>
+        <path d="M9.954 2.21a9.99 9.99 0 0 1 4.091-.002A3.993 3.993 0 0 0 16 5.07a3.993 3.993 0 0 0 3.457.261A9.99 9.99 0 0 1 21.5 8.876 3.993 3.993 0 0 0 20 12c0 1.264.586 2.391 1.502 3.124a10.043 10.043 0 0 1-2.046 3.543 3.993 3.993 0 0 0-3.456.261 3.993 3.993 0 0 0-1.954 2.86 9.99 9.99 0 0 1-4.091.004A3.993 3.993 0 0 0 8 18.927a3.993 3.993 0 0 0-3.457-.26A9.99 9.99 0 0 1 2.5 15.121 3.993 3.993 0 0 0 4 11.999a3.993 3.993 0 0 0-1.502-3.124 10.043 10.043 0 0 1 2.046-3.543A3.993 3.993 0 0 0 8 5.071a3.993 3.993 0 0 0 1.954-2.86zM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/>
+        </svg>`;
 
         const artOptions: any = {
           container: playerContainerRef.current,
           url: manifestUrl,
           type: 'm3u8',
-          volume: 0.7,
+          volume: 0.9,
           autoplay: true,
           setting: false,
           fullscreen: true,
-          subtitle: { url: '', type: 'srt' }, 
+          subtitle: { url: '', type: 'srt' },
           controls: [
             {
               position: 'right',
@@ -411,7 +414,7 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
 
       if (pgsWorkerRef.current) {
         pgsWorkerRef.current.postMessage({ type: 'LOAD', url: track.url });
-        lastSentTimeRef.current = -1; 
+        lastSentTimeRef.current = -1;
       }
     } else {
       activeSubTypeRef.current = 'none';
@@ -433,14 +436,14 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
         } as React.CSSProperties}
       >
         {isSettingsMenuOpen && (
-          <div className="absolute bottom-16 right-4 bg-black/80 backdrop-blur-md border border-neutral-800 p-6 rounded-2xl z-[9999] flex flex-col gap-5 min-w-[320px] shadow-2xl transition-opacity animate-in fade-in slide-in-from-bottom-2 duration-200">
+          <div className="absolute bottom-16 right-4 bg-black/80 backdrop-blur-md border border-neutral-800 p-6 rounded-2xl z-[9999] flex flex-col gap-5 min-w-[320px] shadow-2xl transition-opacity animate-in fade-in slide-in-from-bottom-2 duration-100">
             <div className="flex justify-between items-center mb-1">
               <h3 className="text-white font-bold tracking-widest uppercase text-sm">
                 {activeSubType === 'vtt' ? 'Text Subtitle Settings' : activeSubType === 'pgs' ? 'Image Subtitle Settings' : 'Subtitle Settings'}
               </h3>
               <button onClick={() => setIsSettingsMenuOpen(false)} className="text-neutral-400 hover:text-white transition-colors">✕</button>
             </div>
-            
+
             {activeSubType === 'none' ? (
               <div className="text-xs text-neutral-400 py-4 text-center font-medium">Select a subtitle track to adjust settings.</div>
             ) : (
@@ -452,15 +455,15 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
                       {Math.round((activeSubType === 'vtt' ? vttConfig.size : pgsConfig.size) * 100)}%
                     </span>
                   </label>
-                  <input 
-                    type="range" min="0.2" max="2.0" step="0.05" 
-                    value={activeSubType === 'vtt' ? vttConfig.size : pgsConfig.size} 
+                  <input
+                    type="range" min="0.2" max="2.0" step="0.05"
+                    value={activeSubType === 'vtt' ? vttConfig.size : pgsConfig.size}
                     onChange={(e) => {
                       const val = parseFloat(e.target.value);
-                      if (activeSubType === 'vtt') setVttConfig(p => ({...p, size: val}));
-                      else setPgsConfig(p => ({...p, size: val}));
-                    }} 
-                    className="w-full accent-blue-500 cursor-pointer" 
+                      if (activeSubType === 'vtt') setVttConfig(p => ({ ...p, size: val }));
+                      else setPgsConfig(p => ({ ...p, size: val }));
+                    }}
+                    className="w-full accent-blue-500 cursor-pointer"
                   />
                 </div>
                 <div className="flex flex-col gap-3">
@@ -470,15 +473,15 @@ export default function PlayerUI({ streamInfo }: { streamInfo: any }) {
                       {activeSubType === 'vtt' ? vttConfig.bottom : pgsConfig.bottom}%
                     </span>
                   </label>
-                  <input 
-                    type="range" min="0" max="100" step="1" 
-                    value={activeSubType === 'vtt' ? vttConfig.bottom : pgsConfig.bottom} 
+                  <input
+                    type="range" min="0" max="100" step="1"
+                    value={activeSubType === 'vtt' ? vttConfig.bottom : pgsConfig.bottom}
                     onChange={(e) => {
                       const val = parseFloat(e.target.value);
-                      if (activeSubType === 'vtt') setVttConfig(p => ({...p, bottom: val}));
-                      else setPgsConfig(p => ({...p, bottom: val}));
-                    }} 
-                    className="w-full accent-blue-500 cursor-pointer" 
+                      if (activeSubType === 'vtt') setVttConfig(p => ({ ...p, bottom: val }));
+                      else setPgsConfig(p => ({ ...p, bottom: val }));
+                    }}
+                    className="w-full accent-blue-500 cursor-pointer"
                   />
                 </div>
               </>
