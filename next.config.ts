@@ -13,6 +13,17 @@ const nextConfig: NextConfig = {
       },
     ],
   },
+  async rewrites() {
+    // Read the worker URL from the environment, fallback to localhost for dev
+    const workerUrl = process.env.WORKER_URL || "http://127.0.0.1:8787";
+    
+    return [
+      {
+        source: '/api/:path*',
+        destination: `${workerUrl}/api/:path*`, 
+      },
+    ];
+  },
 };
 
 export default nextConfig;

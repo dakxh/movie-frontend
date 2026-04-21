@@ -38,14 +38,23 @@ async function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutM
   }
 }
 
-export const getHomeCatalog = cache(async (limit = 24, offset = 0): Promise<MediaItem[]> => {
+export const getHomeCatalog = cache(async (limit = 24, cursor = 0): Promise<MediaItem[]> => {
   try {
-    const res = await fetchWithTimeout(`${API_BASE}/catalog?limit=${limit}&offset=${offset}`, { next: { revalidate: 3 } });
+    // Note: I also updated 'offset' to 'cursor' in the URL to match your worker's logic
+    const res = await fetchWithTimeout(`${API_BASE}/catalog?limit=${limit}&cursor=${cursor}`, { next: { revalidate: 3 } });
     if (!res.ok) throw new Error(`Failed to fetch catalog: ${res.status}`);
-    return res.json();
+    
+    const payload = await res.json();
+    
+    // Extract the 'data' array from the worker's pagination payload
+    if (payload && Array.isArray(payload.data)) {
+      return payload.data;
+    }
+    
+    return [];
   } catch (error) {
     console.error("🚨 API Catalog fetch failed:", error);
-    return[];
+    return [];
   }
 });
 

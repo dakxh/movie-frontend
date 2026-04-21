@@ -73,7 +73,16 @@ export default function SearchOverlay() {
         signal: abortControllerRef.current.signal,
       });
 
-      if (!res.ok) throw new Error('Search failed');
+      if (!res.ok) {
+        let errorMessage = `HTTP Error ${res.status}: ${res.statusText}`;
+        try {
+          const errorBody = await res.text();
+          errorMessage += `\nResponse Body: ${errorBody}`;
+        } catch (parseError) {
+          errorMessage += `\n(Could not read response body)`;
+        }
+        throw new Error(errorMessage);
+      }
       const data = await res.json();
       
       cacheRef.current.set(searchQuery, data);
@@ -83,7 +92,10 @@ export default function SearchOverlay() {
         setResults(data);
       });
     } catch (err: any) {
-      if (err.name !== 'AbortError') console.error(err);
+      if (err.name !== 'AbortError') {
+        // [NEW] Log the detailed error we built above
+        console.error("🔍 Search Pipeline Error:", err.message || err);
+      }
     } finally {
       setIsLoading(false);
     }
