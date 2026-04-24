@@ -38,23 +38,32 @@ async function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutM
   }
 }
 
-export const getHomeCatalog = cache(async (limit = 24, cursor = 0): Promise<MediaItem[]> => {
+// Add this interface near your other exports
+export interface CatalogPayload {
+  data: MediaItem[];
+  next_cursor: number | null;
+}
+
+// Update the function signature and return logic
+export const getHomeCatalog = cache(async (limit = 24, cursor = 0): Promise<CatalogPayload> => {
   try {
-    // Note: I also updated 'offset' to 'cursor' in the URL to match your worker's logic
     const res = await fetchWithTimeout(`${API_BASE}/catalog?limit=${limit}&cursor=${cursor}`, { next: { revalidate: 3 } });
     if (!res.ok) throw new Error(`Failed to fetch catalog: ${res.status}`);
     
     const payload = await res.json();
     
-    // Extract the 'data' array from the worker's pagination payload
     if (payload && Array.isArray(payload.data)) {
-      return payload.data;
+      // Return both the data AND the cursor
+      return {
+        data: payload.data,
+        next_cursor: payload.next_cursor
+      };
     }
     
-    return [];
+    return { data: [], next_cursor: null };
   } catch (error) {
     console.error("🚨 API Catalog fetch failed:", error);
-    return [];
+    return { data: [], next_cursor: null };
   }
 });
 

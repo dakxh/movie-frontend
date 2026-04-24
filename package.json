@@ -9,6 +9,7 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@tanstack/react-query": "^5.100.1",
     "artplayer": "^5.4.0",
     "artplayer-plugin-vtt-thumbnail": "^1.1.0",
     "hls.js": "^1.6.15",
